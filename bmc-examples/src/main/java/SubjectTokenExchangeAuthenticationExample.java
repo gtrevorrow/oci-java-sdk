@@ -1,20 +1,11 @@
-import com.oracle.bmc.ConfigFileReader;
 import com.oracle.bmc.Region;
-import com.oracle.bmc.auth.AuthenticationDetailsProvider;
 import com.oracle.bmc.auth.BasicAuthenticationDetailsProvider;
 import com.oracle.bmc.auth.SubjectTokenExchangeAuthenticationDetailProvider;
-import com.oracle.bmc.auth.SessionKeySupplier;
-import com.oracle.bmc.auth.internal.AsyncFederationClient;
-import com.oracle.bmc.auth.internal.SubjectTokenSupplierImpl;
 import com.oracle.bmc.objectstorage.ObjectStorageClient;
 import com.oracle.bmc.objectstorage.requests.GetNamespaceRequest;
 import com.oracle.bmc.objectstorage.responses.GetNamespaceResponse;
 
-import java.io.IOException;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.NoSuchAlgorithmException;
-import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 /**
  * This example demonstrates how to use the
@@ -65,15 +56,25 @@ public class SubjectTokenExchangeAuthenticationExample {
 
         System.out.println("--- Debug Information ---");
         System.out.println("Token Exchange URL: " + tokenExchangeUrl);
-        System.out.println("Subject Token (first 10 chars): " + subjectToken.substring(0, Math.min(subjectToken.length(), 10)) + "...");
-        System.out.println("Client Credential (first 10 chars): " + clientCredential.substring(0, Math.min(clientCredential.length(), 10)) + "...");
+        System.out.println("Subject Token (first 10 chars): "
+                + subjectToken.substring(0, Math.min(subjectToken.length(), 10)) + "...");
+        System.out.println("Client Credential (first 10 chars): "
+                + clientCredential.substring(0, Math.min(clientCredential.length(), 10)) + "...");
         System.out.println("Region ID: " + regionId);
         System.out.println("Compartment ID: " + compartmentId);
         System.out.println("-------------------------");
 
         // Configure AuthenticationDetailsProvider
         System.out.println("Configuring AuthenticationDetailsProvider...");
-        SubjectTokenSupplierImpl dummySubjectTokenSupplier = new SubjectTokenSupplierImpl(subjectToken);
+
+        // Example: Dynamic supplier fetching token from an external source
+        Supplier<String> dynamicSubjectTokenSupplier = () -> {
+            String token = System.getenv("OCI_SUBJECT_TOKEN");
+            if (token == null || token.isEmpty()) {
+                throw new IllegalStateException("Failed to fetch subject token");
+            }
+            return token;
+        };
 
         // Build the SubjectTokenExchangeAuthenticationDetailProvider
         System.out.println("Building SubjectTokenExchangeAuthenticationDetailProvider...");
@@ -81,7 +82,7 @@ public class SubjectTokenExchangeAuthenticationExample {
                 .tokenExchangeUrl(tokenExchangeUrl)
                 .clientCredential(clientCredential)
                 .region(Region.fromRegionId(regionId))
-                .subjectToken(dummySubjectTokenSupplier)
+                .subjectTokenSupplier(dynamicSubjectTokenSupplier)
                 .build();
         System.out.println("SubjectTokenExchangeAuthenticationDetailProvider built successfully.");
 
@@ -90,7 +91,6 @@ public class SubjectTokenExchangeAuthenticationExample {
         ObjectStorageClient osClient = ObjectStorageClient.builder()
                 .region(Region.fromRegionId(regionId))
                 .build(provider);
-        System.out.println("Object Storage Client initialized.");
 
         try {
             // Make a call to Object Storage to validate authentication
