@@ -11,52 +11,28 @@ import java.net.URI;
 import java.security.KeyPair;
 import java.security.interfaces.RSAPublicKey;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
-/**
- * This class implements the {@link FederationClient} interface and is
- * responsible for
- * exchanging a subject token for a security token from an identity domain.
- * It handles caching and refreshing of the security token in a thread-safe
- * manner.
- */
 public class SubjectTokenExchangeAsyncFederationClient extends AbstractAsyncFederationClient {
         private static final Logger LOG = org.slf4j.LoggerFactory
                         .getLogger(SubjectTokenExchangeAsyncFederationClient.class);
-        private final SubjectTokenSupplierImpl subjectTokenSupplier;
+        private final Supplier<String> subjectTokenSupplier;
         private final String tokenExchangeEndpoint;
         private final String clientCredentials;
         private final Object refreshLock = new Object();
 
-        /**
-         * Constructs a new TokenExchangeFederationClient.
-         *
-         * @param tokenExchangeEndpoint The endpoint for token exchange.
-         * @param subjectTokenSupplier  A supplier for the subject token.
-         * @param sessionKeySupplier    A supplier for the session key.
-         * @param clientCredentials     The client credentials for basic authentication.
-         */
         public SubjectTokenExchangeAsyncFederationClient(
                         String tokenExchangeEndpoint,
-                        SubjectTokenSupplierImpl subjectTokenSupplier,
+                        Supplier<String> subjectTokenSupplier,
                         SessionKeySupplier sessionKeySupplier,
                         String clientCredentials) {
                 super(sessionKeySupplier);
                 this.subjectTokenSupplier = subjectTokenSupplier;
                 this.tokenExchangeEndpoint = tokenExchangeEndpoint;
                 this.clientCredentials = clientCredentials;
-                // Circuit breaker configuration and additional client configurators are not
-                // used in this implementation
                 LOG.debug("TokenExchangeFederationClient initialized with endpoint: {}", tokenExchangeEndpoint);
         }
 
-        /**
-         * Gets a security token. If the current token is still valid, it will be
-         * returned.
-         * Otherwise, a new token will be requested from the server. This method is
-         * thread-safe.
-         *
-         * @return A security token.
-         */
         @Override
         public CompletableFuture<String> getSecurityToken() {
                 if (securityTokenAdapter.isValid()) {
@@ -64,7 +40,6 @@ public class SubjectTokenExchangeAsyncFederationClient extends AbstractAsyncFede
                 }
 
                 synchronized (refreshLock) {
-                        // Re-check validity inside lock to prevent race conditions
                         if (securityTokenAdapter.isValid()) {
                                 return CompletableFuture.completedFuture(securityTokenAdapter.getSecurityToken());
                         }
@@ -87,12 +62,6 @@ public class SubjectTokenExchangeAsyncFederationClient extends AbstractAsyncFede
                 }
         }
 
-        /**
-         * Retrieves a new security token from the federation server by performing a
-         * token exchange.
-         *
-         * @return A new {@link SecurityTokenAdapter} containing the security token.
-         */
         @Override
         public CompletableFuture<SecurityTokenAdapter> getSecurityTokenFromServer() {
                 LOG.info("getSecurityTokenFromServer called, getting session token from Identity Domain");
@@ -122,15 +91,12 @@ public class SubjectTokenExchangeAsyncFederationClient extends AbstractAsyncFede
                                 return future;
                         }
 
-                        // Build HTTP client
                         HttpClientBuilder httpClientBuilder = HttpProvider.getDefault().newBuilder()
                                         .baseUri(URI.create(tokenExchangeEndpoint));
 
-                        // Prepare basic auth header
                         String basicAuth = clientCredentials;
                         LOG.debug("Basic Auth Header (encoded): {}", basicAuth);
 
-                        // Prepare request body for token endpoint (OAuth2 token exchange grant)
                         StringBuilder requestBodyBuilder = new StringBuilder();
                         requestBodyBuilder
                                         .append("grant_type=")
@@ -139,14 +105,12 @@ public class SubjectTokenExchangeAsyncFederationClient extends AbstractAsyncFede
                         requestBodyBuilder
                                         .append("&subject_token_type=")
                                         .append(java.net.URLEncoder.encode("jwt", "UTF-8"));
-
                         requestBodyBuilder
                                         .append("&subject_token=")
                                         .append(java.net.URLEncoder.encode(subjectToken, "UTF-8"));
                         requestBodyBuilder
                                         .append("&requested_token_type=")
                                         .append(java.net.URLEncoder.encode("urn:oci:token-type:oci-upst", "UTF-8"));
-                        // DER base64 encode the public key
                         String publicKeyDerBase64 = java.util.Base64.getEncoder()
                                         .encodeToString(publicKey.getEncoded());
                         requestBodyBuilder
@@ -155,7 +119,6 @@ public class SubjectTokenExchangeAsyncFederationClient extends AbstractAsyncFede
 
                         String requestBody = requestBodyBuilder.toString();
 
-                        // Make HTTP POST call to token endpoint
                         return httpClientBuilder
                                         .build()
                                         .createRequest(Method.POST)
@@ -212,14 +175,6 @@ public class SubjectTokenExchangeAsyncFederationClient extends AbstractAsyncFede
                 }
         }
 
-        /**
-         * Forces a refresh of the security token. This will always fetch a new token
-         * from the
-         * federation server, regardless of the validity of the current token. This
-         * method is thread-safe.
-         *
-         * @return The new security token.
-         */
         @Override
         public CompletableFuture<String> refreshAndGetSecurityToken() {
                 CompletableFuture<String> future = new CompletableFuture<>();
@@ -237,20 +192,12 @@ public class SubjectTokenExchangeAsyncFederationClient extends AbstractAsyncFede
                                                                                         .getSecurityToken());
                                                                 }
                                                         });
-
                 }
                 return future;
         }
 
-        /**
-         * Gets a claim from the security token.
-         *
-         * @param key The claim key.
-         * @return The claim value as a string.
-         */
         @Override
         public String getStringClaim(String key) {
                 return securityTokenAdapter.getStringClaim(key);
         }
-
 }

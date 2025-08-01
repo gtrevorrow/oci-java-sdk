@@ -20,9 +20,6 @@ import java.security.KeyPair;
 import java.security.PublicKey;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
-import java.nio.charset.StandardCharsets;
-
-import com.oracle.bmc.util.StreamUtils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
@@ -96,7 +93,6 @@ public class SubjectTokenExchangeAuthenticationDetailProviderTest {
                                 mockFederationClient,
                                 mockSessionKeySupplier,
                                 MOCK_TOKEN_EXCHANGE_URL,
-                                MOCK_SUBJECT_TOKEN,
                                 MOCK_REGION);
 
                 assertNotNull(provider);
@@ -109,14 +105,14 @@ public class SubjectTokenExchangeAuthenticationDetailProviderTest {
 
         @Test
         public void testBuilder() {
-                SubjectTokenExchangeAuthenticationDetailProvider.TokenExchangeAuthenticationDetailProviderBuilder builder =
-                        org.mockito.Mockito.spy(new SubjectTokenExchangeAuthenticationDetailProvider.TokenExchangeAuthenticationDetailProviderBuilder());
+                SubjectTokenExchangeAuthenticationDetailProvider.TokenExchangeAuthenticationDetailProviderBuilder builder = org.mockito.Mockito
+                                .spy(new SubjectTokenExchangeAuthenticationDetailProvider.TokenExchangeAuthenticationDetailProviderBuilder());
 
                 when(builder.createFederationClient(any(SessionKeySupplier.class))).thenReturn(mockFederationClient);
 
                 SubjectTokenExchangeAuthenticationDetailProvider provider = builder
                                 .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
-                                .subjectToken(new SubjectTokenSupplierImpl(MOCK_SUBJECT_TOKEN))
+                                .subjectTokenSupplier(new SubjectTokenSupplierImpl(MOCK_SUBJECT_TOKEN))
                                 .clientCredential(MOCK_CLIENT_CREDENTIAL)
                                 .region(MOCK_REGION)
                                 .build();
@@ -133,7 +129,6 @@ public class SubjectTokenExchangeAuthenticationDetailProviderTest {
                                 mockFederationClient,
                                 mockSessionKeySupplier,
                                 MOCK_TOKEN_EXCHANGE_URL,
-                                MOCK_SUBJECT_TOKEN,
                                 MOCK_REGION);
 
                 assertEquals(MOCK_SECURITY_TOKEN, provider.refresh());
@@ -149,7 +144,6 @@ public class SubjectTokenExchangeAuthenticationDetailProviderTest {
                                 mockFederationClient,
                                 mockSessionKeySupplier,
                                 MOCK_TOKEN_EXCHANGE_URL,
-                                MOCK_SUBJECT_TOKEN,
                                 MOCK_REGION);
 
                 assertEquals(MOCK_SECURITY_TOKEN,
@@ -187,7 +181,6 @@ public class SubjectTokenExchangeAuthenticationDetailProviderTest {
                                 configurableFederationClient,
                                 mockSessionKeySupplier,
                                 MOCK_TOKEN_EXCHANGE_URL,
-                                MOCK_SUBJECT_TOKEN,
                                 MOCK_REGION);
 
                 assertEquals(MOCK_NEW_SECURITY_TOKEN,
@@ -207,7 +200,6 @@ public class SubjectTokenExchangeAuthenticationDetailProviderTest {
                                 mockFederationClient,
                                 mockSessionKeySupplier,
                                 MOCK_TOKEN_EXCHANGE_URL,
-                                MOCK_SUBJECT_TOKEN,
                                 MOCK_REGION);
 
                 InputStream privateKeyStream = provider.getPrivateKey();

@@ -3,13 +3,13 @@ package com.oracle.bmc.auth;
 import java.io.InputStream;
 import java.security.interfaces.RSAPrivateKey;
 import java.time.Duration;
+import java.util.function.Supplier;
 
 import com.oracle.bmc.Region;
 import com.oracle.bmc.auth.internal.AuthUtils;
 import com.oracle.bmc.auth.AbstractFederationClientAuthenticationDetailsProviderBuilder.SessionKeySupplierImpl;
 import com.oracle.bmc.auth.AbstractRequestingAuthenticationDetailsProvider.CachingSessionKeySupplier;
 import com.oracle.bmc.auth.internal.AsyncFederationClient;
-import com.oracle.bmc.auth.internal.SubjectTokenSupplierImpl;
 import com.oracle.bmc.auth.internal.SubjectTokenExchangeAsyncFederationClient;
 import java.io.ByteArrayInputStream;
 import java.util.Base64;
@@ -20,7 +20,6 @@ public class SubjectTokenExchangeAuthenticationDetailProvider
         ProvidesConfigurableRefresh {
 
     private final String tokenExchangeUrl;
-    private final String subjectToken;
     private String securityToken;
     private String clientCredential;
     private AsyncFederationClient federationClient;
@@ -28,25 +27,24 @@ public class SubjectTokenExchangeAuthenticationDetailProvider
     private final Region region;
 
     public SubjectTokenExchangeAuthenticationDetailProvider(AsyncFederationClient federationClient,
-            SessionKeySupplier sessionKeySupplier, String tokenExchangeUrl, String subjectToken,
+            SessionKeySupplier sessionKeySupplier, String tokenExchangeUrl,
             Region region) {
         this.federationClient = federationClient;
         this.sessionKeySupplier = sessionKeySupplier;
         this.tokenExchangeUrl = tokenExchangeUrl;
-        this.subjectToken = subjectToken;
         this.region = region;
     }
 
     public static class TokenExchangeAuthenticationDetailProviderBuilder {
 
         private String tokenExchangeUrl;
-        private String subjectToken;
         private Region region;
         private SessionKeySupplier sessionKeySupplier;
         private AsyncFederationClient federationClient;
-        private SubjectTokenSupplierImpl subjectTokenSupplierImpl;
+        private Supplier<String> subjectTokenSupplier;
         private String clientCredential;
-        private static final Logger LOG = org.slf4j.LoggerFactory.getLogger(TokenExchangeAuthenticationDetailProviderBuilder.class);
+        private static final Logger LOG = org.slf4j.LoggerFactory
+                .getLogger(TokenExchangeAuthenticationDetailProviderBuilder.class);
 
         public TokenExchangeAuthenticationDetailProviderBuilder() {
         }
@@ -60,7 +58,7 @@ public class SubjectTokenExchangeAuthenticationDetailProvider
         protected AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
             if (this.federationClient == null) {
                 this.federationClient = new SubjectTokenExchangeAsyncFederationClient(tokenExchangeUrl,
-                        subjectTokenSupplierImpl, sessionKeySupplier, clientCredential);
+                        subjectTokenSupplier, sessionKeySupplier, clientCredential);
             }
             return this.federationClient;
         }
@@ -94,10 +92,9 @@ public class SubjectTokenExchangeAuthenticationDetailProvider
             return this;
         }
 
-        public TokenExchangeAuthenticationDetailProviderBuilder subjectToken(
-                SubjectTokenSupplierImpl subjectTokenSupplierImpl) {
-            this.subjectTokenSupplierImpl = subjectTokenSupplierImpl;
-            this.subjectToken = subjectTokenSupplierImpl.get();
+        public TokenExchangeAuthenticationDetailProviderBuilder subjectTokenSupplier(
+                Supplier<String> subjectTokenSupplier) {
+            this.subjectTokenSupplier = subjectTokenSupplier;
             return this;
         }
 
@@ -106,18 +103,6 @@ public class SubjectTokenExchangeAuthenticationDetailProvider
             return this;
         }
 
-        // public TokenExchangeAuthenticationDetailProviderBuilder sessionKeySupplier(
-        // SessionKeySupplier sessionKeySupplier) {
-        // this.sessionKeySupplier = sessionKeySupplier;
-        // return this;
-        // }
-
-        // public TokenExchangeAuthenticationDetailProviderBuilder federationClient(
-        // AsyncFederationClient federationClient) {
-        // this.federationClient = federationClient;
-        // return this;
-        // }
-
         public SubjectTokenExchangeAuthenticationDetailProvider build() {
             SessionKeySupplier sessionKeySupplierToUse = sessionKeySupplier != null ? sessionKeySupplier
                     : new SessionKeySupplierImpl();
@@ -125,23 +110,8 @@ public class SubjectTokenExchangeAuthenticationDetailProvider
             this.federationClient = createFederationClient(sessionKeySupplierToUse);
             return new SubjectTokenExchangeAuthenticationDetailProvider(this.federationClient, this.sessionKeySupplier,
                     this.tokenExchangeUrl,
-                    this.subjectToken, region);
+                    region);
         }
-
-        // /**
-        // * Builds a TokenExchangeAuthenticationDetailProvider with the provided
-        // session
-        // * key supplier.
-        // *
-        // * @param sessionKeySupplierToUse the session key supplier to use
-        // * @return a new TokenExchangeAuthenticationDetailProvider instance
-        // */
-        // protected SubjectTokenExchangeAuthenticationDetailProvider buildProvider(
-        // SessionKeySupplier sessionKeySupplierToUse) {
-        // return new SubjectTokenExchangeAuthenticationDetailProvider(
-        // federationClient, sessionKeySupplierToUse, tokenExchangeUrl, subjectToken,
-        // region);
-        // }
     }
 
     @Override
@@ -192,5 +162,4 @@ public class SubjectTokenExchangeAuthenticationDetailProvider
     public char[] getPassphraseCharacters() {
         return null; // Not applicable for token exchange
     }
-
 }
