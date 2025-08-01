@@ -20,6 +20,7 @@ public class SubjectTokenExchangeAsyncFederationClient extends AbstractAsyncFede
         private final String tokenExchangeEndpoint;
         private final String clientCredentials;
         private final Object refreshLock = new Object();
+        private volatile CompletableFuture<SecurityTokenAdapter> pendingRefresh = null;
 
         public SubjectTokenExchangeAsyncFederationClient(
                         String tokenExchangeEndpoint,
@@ -35,30 +36,36 @@ public class SubjectTokenExchangeAsyncFederationClient extends AbstractAsyncFede
 
         @Override
         public CompletableFuture<String> getSecurityToken() {
+                // Optimistic check to avoid synchronization if token is valid
                 if (securityTokenAdapter.isValid()) {
                         return CompletableFuture.completedFuture(securityTokenAdapter.getSecurityToken());
                 }
 
                 synchronized (refreshLock) {
+                        // Double-check validity within lock
                         if (securityTokenAdapter.isValid()) {
                                 return CompletableFuture.completedFuture(securityTokenAdapter.getSecurityToken());
                         }
 
-                        LOG.debug("Security token is not valid, refreshing from server.");
+                        // Check for ongoing refresh
+                        if (pendingRefresh != null && !pendingRefresh.isCompletedExceptionally()) {
+                                LOG.debug("Reusing ongoing token refresh operation.");
+                                return pendingRefresh.thenApply(SecurityTokenAdapter::getSecurityToken);
+                        }
+
+                        LOG.debug("Security token is not valid, initiating refresh from server.");
                         sessionKeySupplier.refreshKeys();
-                        CompletableFuture<String> future = new CompletableFuture<>();
-                        getSecurityTokenFromServer()
-                                        .whenComplete(
-                                                        (newAdapter, error) -> {
-                                                                if (error != null) {
-                                                                        future.completeExceptionally(error);
-                                                                } else {
-                                                                        this.securityTokenAdapter = newAdapter;
-                                                                        future.complete(this.securityTokenAdapter
-                                                                                        .getSecurityToken());
-                                                                }
-                                                        });
-                        return future;
+                        pendingRefresh = getSecurityTokenFromServer();
+                        return pendingRefresh.thenApply(adapter -> {
+                                synchronized (refreshLock) {
+                                        securityTokenAdapter = adapter;
+                                        return adapter.getSecurityToken();
+                                }
+                        }).whenComplete((result, ex) -> {
+                                synchronized (refreshLock) {
+                                        pendingRefresh = null; // Clear pending refresh
+                                }
+                        });
                 }
         }
 
@@ -177,23 +184,27 @@ public class SubjectTokenExchangeAsyncFederationClient extends AbstractAsyncFede
 
         @Override
         public CompletableFuture<String> refreshAndGetSecurityToken() {
-                CompletableFuture<String> future = new CompletableFuture<>();
                 synchronized (refreshLock) {
                         LOG.debug("Force refreshing keys and security token from Identity Domain");
+                        // Check for ongoing refresh
+                        if (pendingRefresh != null && !pendingRefresh.isCompletedExceptionally()) {
+                                LOG.debug("Reusing ongoing token refresh operation for forced refresh.");
+                                return pendingRefresh.thenApply(SecurityTokenAdapter::getSecurityToken);
+                        }
+
                         sessionKeySupplier.refreshKeys();
-                        getSecurityTokenFromServer()
-                                        .whenComplete(
-                                                        (newAdapter, error) -> {
-                                                                if (error != null) {
-                                                                        future.completeExceptionally(error);
-                                                                } else {
-                                                                        this.securityTokenAdapter = newAdapter;
-                                                                        future.complete(this.securityTokenAdapter
-                                                                                        .getSecurityToken());
-                                                                }
-                                                        });
+                        pendingRefresh = getSecurityTokenFromServer();
+                        return pendingRefresh.thenApply(adapter -> {
+                                synchronized (refreshLock) {
+                                        securityTokenAdapter = adapter;
+                                        return adapter.getSecurityToken();
+                                }
+                        }).whenComplete((result, ex) -> {
+                                synchronized (refreshLock) {
+                                        pendingRefresh = null; // Clear pending refresh
+                                }
+                        });
                 }
-                return future;
         }
 
         @Override

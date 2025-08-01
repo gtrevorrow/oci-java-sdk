@@ -13,6 +13,7 @@ public abstract class AbstractAsyncFederationClient implements AsyncFederationCl
     protected volatile SecurityTokenAdapter securityTokenAdapter;
     protected final SessionKeySupplier sessionKeySupplier;
     private volatile CompletableFuture<SecurityTokenAdapter> pendingRefresh = null;
+    private final Object refreshLock = new Object();
 
     public AbstractAsyncFederationClient(SessionKeySupplier sessionKeySupplier) {
         this.sessionKeySupplier = sessionKeySupplier;
@@ -41,7 +42,7 @@ public abstract class AbstractAsyncFederationClient implements AsyncFederationCl
         }
 
         // Use a single CompletableFuture for refresh coordination
-        synchronized (this) {
+        synchronized (refreshLock) {
             if (pendingRefresh != null && !pendingRefresh.isCompletedExceptionally()) {
                 return pendingRefresh.thenApply(SecurityTokenAdapter::getSecurityToken);
             }
