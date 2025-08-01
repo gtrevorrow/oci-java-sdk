@@ -2,24 +2,17 @@ package com.oracle.bmc.auth.internal;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
-
-import com.oracle.bmc.auth.ProvidesConfigurableRefresh;
 import com.oracle.bmc.auth.SessionKeySupplier;
-
 import org.slf4j.Logger;
-
-
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.Optional;
 
 import com.oracle.bmc.auth.ProvidesConfigurableRefreshAsync;
 
-public abstract class AbstractAsyncFederationClient implements AsyncFederationClient , ProvidesConfigurableRefreshAsync{
+public abstract class AbstractAsyncFederationClient implements AsyncFederationClient, ProvidesConfigurableRefreshAsync {
     private static final Logger LOG = org.slf4j.LoggerFactory.getLogger(AbstractAsyncFederationClient.class);
-    private static final ExecutorService ASYNC_REFRESH_EXECUTOR = Executors.newCachedThreadPool();
     protected volatile SecurityTokenAdapter securityTokenAdapter;
     protected final SessionKeySupplier sessionKeySupplier;
+    private volatile CompletableFuture<SecurityTokenAdapter> pendingRefresh = null;
 
     public AbstractAsyncFederationClient(SessionKeySupplier sessionKeySupplier) {
         this.sessionKeySupplier = sessionKeySupplier;
@@ -35,36 +28,32 @@ public abstract class AbstractAsyncFederationClient implements AsyncFederationCl
     }
 
     @Override
-    public CompletableFuture<String> refreshAndGetSecurityTokenIfExpiringWithin(
-            Duration time, boolean refreshKeys) {
+    public CompletableFuture<String> refreshAndGetSecurityTokenIfExpiringWithin(Duration time, boolean refreshKeys) {
         return refreshAndGetSecurityTokenInnerAsync(true, Optional.of(time), refreshKeys);
     }
 
     protected CompletableFuture<String> refreshAndGetSecurityTokenInnerAsync(
             final boolean doFinalTokenValidityCheck, Optional<Duration> time, boolean refreshKeys) {
-        return CompletableFuture.supplyAsync(() -> {
-            synchronized (this) {
-                if (!doFinalTokenValidityCheck
-                        || (time.isPresent()
-                                ? (!securityTokenAdapter.isValid(time))
-                                : (!securityTokenAdapter.isValid()))) {
-                    if (refreshKeys) {
-                        LOG.info("Refreshing session keys.");
-                        sessionKeySupplier.refreshKeys();
-                    }
-                    // This part needs to be truly async, but getSecurityTokenFromServerAsync is abstract
-                    // and needs to be implemented by concrete classes. For now, we'll call it synchronously
-                    // within the supplyAsync block, assuming concrete implementations will make it non-blocking.
-                    try {
-                        securityTokenAdapter = getSecurityTokenFromServer().get(); // Blocking call here
-                    } catch (Exception e) {
-                        throw new RuntimeException("Failed to get security token asynchronously", e);
-                    }
-                    return securityTokenAdapter.getSecurityToken();
-                }
-                return securityTokenAdapter.getSecurityToken();
+        // Check validity synchronously (lightweight, non-I/O)
+        boolean isValid = securityTokenAdapter.isValid(time);
+        if (doFinalTokenValidityCheck && isValid) {
+            return CompletableFuture.completedFuture(securityTokenAdapter.getSecurityToken());
+        }
+
+        // Use a single CompletableFuture for refresh coordination
+        synchronized (this) {
+            if (pendingRefresh != null && !pendingRefresh.isCompletedExceptionally()) {
+                return pendingRefresh.thenApply(SecurityTokenAdapter::getSecurityToken);
             }
-        }, ASYNC_REFRESH_EXECUTOR);
+            if (refreshKeys) {
+                LOG.info("Refreshing session keys.");
+                sessionKeySupplier.refreshKeys(); // Synchronous, assumed lightweight
+            }
+            pendingRefresh = getSecurityTokenFromServer();
+            return pendingRefresh.thenApply(adapter -> {
+                securityTokenAdapter = adapter;
+                return adapter.getSecurityToken();
+            }).whenComplete((result, ex) -> pendingRefresh = null);
+        }
     }
 }
-    
