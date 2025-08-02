@@ -27,9 +27,6 @@ import org.slf4j.Logger;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
@@ -44,24 +41,22 @@ import java.util.function.Function;
 import static com.oracle.bmc.http.internal.HeaderUtils.AUTHORIZATION_HEADER_NAME;
 
 /**
- * Abstract builder base class for authentication details provider extending {@link
+ * Abstract builder base class for authentication details provider extending
+ * {@link
  * AbstractRequestingAuthenticationDetailsProvider}
  *
  * @param <B> builder class
  * @param <P> provider class
  */
 @InternalSdk
-public abstract class AbstractFederationClientAuthenticationDetailsProviderBuilder<
-                B extends AbstractFederationClientAuthenticationDetailsProviderBuilder<B, P>,
-                P extends AbstractAuthenticationDetailsProvider>
+public abstract class AbstractFederationClientAuthenticationDetailsProviderBuilder<B extends AbstractFederationClientAuthenticationDetailsProviderBuilder<B, P>, P extends AbstractAuthenticationDetailsProvider>
         extends AbstractRequestingAuthenticationDetailsProvider.Builder<B> {
 
     /** Service instance for auth. */
-    protected static final com.oracle.bmc.Service SERVICE =
-            com.oracle.bmc.Services.serviceBuilder()
-                    .serviceName("AUTH")
-                    .serviceEndpointPrefix("auth")
-                    .build();
+    protected static final com.oracle.bmc.Service SERVICE = com.oracle.bmc.Services.serviceBuilder()
+            .serviceName("AUTH")
+            .serviceEndpointPrefix("auth")
+            .build();
 
     /** Default base url of metadata service. */
     public static final String METADATA_SERVICE_BASE_URL = "http://169.254.169.254/opc/v2/";
@@ -72,14 +67,16 @@ public abstract class AbstractFederationClientAuthenticationDetailsProviderBuild
     /** Metadata URL from environment variable, to use if present. */
     public static final String METADATA_URL_OVERRIDE = System.getenv(METADATA_BASE_URL_ENV_VAR);
 
-    /** The Authorization header value to be sent for requests to the metadata service. */
+    /**
+     * The Authorization header value to be sent for requests to the metadata
+     * service.
+     */
     public static final String AUTHORIZATION_HEADER_VALUE = "Bearer Oracle";
 
     private static final String REGION_PATH_LITERAL = "region";
 
-    private static final Logger LOG =
-            org.slf4j.LoggerFactory.getLogger(
-                    AbstractFederationClientAuthenticationDetailsProviderBuilder.class);
+    private static final Logger LOG = org.slf4j.LoggerFactory.getLogger(
+            AbstractFederationClientAuthenticationDetailsProviderBuilder.class);
 
     /** Base url of metadata service. */
     protected volatile String metadataBaseUrl = METADATA_SERVICE_BASE_URL;
@@ -111,7 +108,8 @@ public abstract class AbstractFederationClientAuthenticationDetailsProviderBuild
     protected Region region = null;
 
     /**
-     * Configure the metadata endpoint to use when retrieving the instance data and principal for
+     * Configure the metadata endpoint to use when retrieving the instance data and
+     * principal for
      * federation.
      *
      * @param metadataBaseUrl the metadata base url
@@ -208,8 +206,8 @@ public abstract class AbstractFederationClientAuthenticationDetailsProviderBuild
      * @return A new provider instance.
      */
     public P build() {
-        SessionKeySupplier sessionKeySupplierToUse =
-                sessionKeySupplier != null ? sessionKeySupplier : new SessionKeySupplierImpl();
+        SessionKeySupplier sessionKeySupplierToUse = sessionKeySupplier != null ? sessionKeySupplier
+                : new SessionKeySupplierImpl();
 
         this.federationClient = createFederationClient(sessionKeySupplierToUse);
 
@@ -224,10 +222,9 @@ public abstract class AbstractFederationClientAuthenticationDetailsProviderBuild
      */
     protected FederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
 
-        CircuitBreakerConfiguration circuitBreakerConfig =
-                circuitBreakerConfiguration != null
-                        ? circuitBreakerConfiguration
-                        : CircuitBreakerUtils.getDefaultAuthClientCircuitBreakerConfiguration();
+        CircuitBreakerConfiguration circuitBreakerConfig = circuitBreakerConfiguration != null
+                ? circuitBreakerConfiguration
+                : CircuitBreakerUtils.getDefaultAuthClientCircuitBreakerConfiguration();
 
         if (purpose != null) {
             return new X509FederationClient(
@@ -260,7 +257,8 @@ public abstract class AbstractFederationClientAuthenticationDetailsProviderBuild
     }
 
     /**
-     * Auto detects the endpoint that should be used when talking to OCI Auth, if no endpoint has
+     * Auto detects the endpoint that should be used when talking to OCI Auth, if no
+     * endpoint has
      * been configured already.
      *
      * @return The auto-detected, or currently set, auth endpoint.
@@ -273,7 +271,8 @@ public abstract class AbstractFederationClientAuthenticationDetailsProviderBuild
             LOG.info("Looking up region for {}", regionStr);
 
             try {
-                // TODO: we should start using 'canonicalRegionName' instead of 'region' and call
+                // TODO: we should start using 'canonicalRegionName' instead of 'region' and
+                // call
                 // Region.fromRegionId, and fall back to 'region' only for backwards compat.
                 region = Region.fromRegionCodeOrId(regionStr);
                 LOG.info("Using region {}", region.getRegionId());
@@ -299,7 +298,9 @@ public abstract class AbstractFederationClientAuthenticationDetailsProviderBuild
         return federationEndpoint;
     }
 
-    /** Auto detects and configures the certificates needed using Instance metadata. */
+    /**
+     * Auto detects and configures the certificates needed using Instance metadata.
+     */
     protected void autoDetectCertificatesUsingMetadataUrl() {
         try {
 
@@ -311,19 +312,17 @@ public abstract class AbstractFederationClientAuthenticationDetailsProviderBuild
             }
 
             if (leafCertificateSupplier == null) {
-                leafCertificateSupplier =
-                        new URLBasedX509CertificateSupplier(
-                                getMetadataResourceDetails("identity/cert.pem"),
-                                getMetadataResourceDetails("identity/key.pem"),
-                                (char[]) null);
+                leafCertificateSupplier = new URLBasedX509CertificateSupplier(
+                        getMetadataResourceDetails("identity/cert.pem"),
+                        getMetadataResourceDetails("identity/key.pem"),
+                        (char[]) null);
             }
 
             if (tenancyId == null) {
-                tenancyId =
-                        AuthUtils.getTenantIdFromCertificate(
-                                leafCertificateSupplier
-                                        .getCertificateAndKeyPair()
-                                        .getCertificate());
+                tenancyId = AuthUtils.getTenantIdFromCertificate(
+                        leafCertificateSupplier
+                                .getCertificateAndKeyPair()
+                                .getCertificate());
             }
 
             if (intermediateCertificateSuppliers == null) {
@@ -342,41 +341,37 @@ public abstract class AbstractFederationClientAuthenticationDetailsProviderBuild
 
     private <R> R fetchRegion(Function<HttpResponse, CompletionStage<R>> responseHandler) {
         Throwable lastException = null;
-        try (HttpClient client =
-                HttpProvider.getDefault()
-                        .newBuilder()
-                        .property(StandardClientProperties.ASYNC_POOL_SIZE, 1)
-                        .property(
-                                StandardClientProperties.CONNECT_TIMEOUT,
-                                Duration.ofMillis(timeoutForEachRetry))
-                        .baseUri(URI.create(getMetadataBaseUrl() + "instance/"))
-                        .build()) {
+        try (HttpClient client = HttpProvider.getDefault()
+                .newBuilder()
+                .property(StandardClientProperties.ASYNC_POOL_SIZE, 1)
+                .property(
+                        StandardClientProperties.CONNECT_TIMEOUT,
+                        Duration.ofMillis(timeoutForEachRetry))
+                .baseUri(URI.create(getMetadataBaseUrl() + "instance/"))
+                .build()) {
 
-            ExponentialBackoffDelayStrategyWithJitter strategy =
-                    new ExponentialBackoffDelayStrategyWithJitter(TimeUnit.SECONDS.toMillis(30));
-            WaiterConfiguration.WaitContext context =
-                    new WaiterConfiguration.WaitContext(System.currentTimeMillis());
+            ExponentialBackoffDelayStrategyWithJitter strategy = new ExponentialBackoffDelayStrategyWithJitter(
+                    TimeUnit.SECONDS.toMillis(30));
+            WaiterConfiguration.WaitContext context = new WaiterConfiguration.WaitContext(System.currentTimeMillis());
 
             if (detectEndpointRetries < 0) {
-                lastException =
-                        new RuntimeException(
-                                "detectEndpointRetries is "
-                                        + detectEndpointRetries
-                                        + ". Retries cannot be negative.");
+                lastException = new RuntimeException(
+                        "detectEndpointRetries is "
+                                + detectEndpointRetries
+                                + ". Retries cannot be negative.");
             }
             for (int retry = 0; retry <= detectEndpointRetries; retry++) {
                 try {
                     SyncFutureWaiter waiter = new SyncFutureWaiter();
-                    try (HttpResponse response =
-                            waiter.listenForResult(
-                                    client.createRequest(Method.GET)
-                                            .offloadExecutor(waiter)
-                                            .appendPathPart(REGION_PATH_LITERAL)
-                                            .header("Accept", "text/plain")
-                                            .header(
-                                                    AUTHORIZATION_HEADER_NAME,
-                                                    AUTHORIZATION_HEADER_VALUE)
-                                            .execute())) {
+                    try (HttpResponse response = waiter.listenForResult(
+                            client.createRequest(Method.GET)
+                                    .offloadExecutor(waiter)
+                                    .appendPathPart(REGION_PATH_LITERAL)
+                                    .header("Accept", "text/plain")
+                                    .header(
+                                            AUTHORIZATION_HEADER_NAME,
+                                            AUTHORIZATION_HEADER_VALUE)
+                                    .execute())) {
                         return waiter.listenForResult(responseHandler.apply(response));
                     }
                 } catch (Throwable e) {
@@ -414,7 +409,8 @@ public abstract class AbstractFederationClientAuthenticationDetailsProviderBuild
     }
 
     /**
-     * Checks the V2 endpoint for both federation endpoint detection & certificates if necessary.
+     * Checks the V2 endpoint for both federation endpoint detection & certificates
+     * if necessary.
      */
     private void executeImdsV2EndpointCheck() {
         try {
@@ -490,43 +486,5 @@ public abstract class AbstractFederationClientAuthenticationDetailsProviderBuild
 
     public Region getRegion() {
         return this.region;
-    }
-
-    /**
-     * This is a helper class to generate in-memory temporary session keys.
-     *
-     * <p>The thread safety of this class is ensured through the Caching class above which
-     * synchronizes on all methods.
-     *
-     * <p>The class is implemented in a lazy way to avoid generating the key if it is not needed or
-     * if refresh is immediately called.
-     */
-    static class SessionKeySupplierImpl implements SessionKeySupplier {
-        private static final KeyPairGenerator GENERATOR;
-        private KeyPair keyPair = null;
-
-        static {
-            try {
-                GENERATOR = KeyPairGenerator.getInstance("RSA");
-                GENERATOR.initialize(2048);
-            } catch (NoSuchAlgorithmException e) {
-                throw new Error(e.getMessage(), e);
-            }
-        }
-
-        SessionKeySupplierImpl() {}
-
-        @Override
-        public KeyPair getKeyPair() {
-            if (this.keyPair == null) {
-                this.keyPair = GENERATOR.generateKeyPair();
-            }
-            return keyPair;
-        }
-
-        @Override
-        public void refreshKeys() {
-            this.keyPair = GENERATOR.generateKeyPair();
-        }
     }
 }

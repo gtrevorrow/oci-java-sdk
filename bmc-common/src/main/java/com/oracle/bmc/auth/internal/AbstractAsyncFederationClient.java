@@ -35,26 +35,31 @@ public abstract class AbstractAsyncFederationClient implements AsyncFederationCl
 
     protected CompletableFuture<String> refreshAndGetSecurityTokenInnerAsync(
             final boolean doFinalTokenValidityCheck, Optional<Duration> time, boolean refreshKeys) {
-        // Check validity synchronously (lightweight, non-I/O)
         boolean isValid = securityTokenAdapter.isValid(time);
         if (doFinalTokenValidityCheck && isValid) {
+            LOG.debug("Token is valid, returning existing token");
             return CompletableFuture.completedFuture(securityTokenAdapter.getSecurityToken());
         }
 
-        // Use a single CompletableFuture for refresh coordination
         synchronized (refreshLock) {
             if (pendingRefresh != null && !pendingRefresh.isCompletedExceptionally()) {
+                LOG.debug("Reusing existing pending refresh: {}", pendingRefresh);
                 return pendingRefresh.thenApply(SecurityTokenAdapter::getSecurityToken);
             }
+            LOG.debug("Initiating new token refresh");
             if (refreshKeys) {
                 LOG.info("Refreshing session keys.");
-                sessionKeySupplier.refreshKeys(); // Synchronous, assumed lightweight
+                sessionKeySupplier.refreshKeys();
             }
             pendingRefresh = getSecurityTokenFromServer();
             return pendingRefresh.thenApply(adapter -> {
+                LOG.debug("Refresh completed, updating token adapter");
                 securityTokenAdapter = adapter;
                 return adapter.getSecurityToken();
-            }).whenComplete((result, ex) -> pendingRefresh = null);
+            }).whenComplete((result, ex) -> {
+                LOG.debug("Refresh future completed, clearing pendingRefresh");
+                pendingRefresh = null;
+            });
         }
     }
 }

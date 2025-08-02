@@ -7,8 +7,8 @@ import java.util.function.Supplier;
 
 import com.oracle.bmc.Region;
 import com.oracle.bmc.auth.internal.AuthUtils;
-import com.oracle.bmc.auth.AbstractFederationClientAuthenticationDetailsProviderBuilder.SessionKeySupplierImpl;
 import com.oracle.bmc.auth.AbstractRequestingAuthenticationDetailsProvider.CachingSessionKeySupplier;
+import com.oracle.bmc.auth.internal.AbstractAsyncFederationClient;
 import com.oracle.bmc.auth.internal.AsyncFederationClient;
 import com.oracle.bmc.auth.internal.SubjectTokenExchangeAsyncFederationClient;
 import java.io.ByteArrayInputStream;
@@ -29,6 +29,19 @@ public class SubjectTokenExchangeAuthenticationDetailProvider
     public SubjectTokenExchangeAuthenticationDetailProvider(AsyncFederationClient federationClient,
             SessionKeySupplier sessionKeySupplier, String tokenExchangeUrl,
             Region region) {
+        if (federationClient == null) {
+            throw new IllegalArgumentException("Federation client must not be null");
+        }
+        if (tokenExchangeUrl == null || tokenExchangeUrl.trim().isEmpty()) {
+            throw new IllegalArgumentException("Token exchange URL must not be null or empty");
+        }
+        if (sessionKeySupplier == null) {
+            throw new IllegalArgumentException("Session key supplier must not be null");
+        }
+        if (region == null) {
+            throw new IllegalArgumentException("Region must not be null");
+        }
+
         this.federationClient = federationClient;
         this.sessionKeySupplier = sessionKeySupplier;
         this.tokenExchangeUrl = tokenExchangeUrl;
@@ -104,6 +117,19 @@ public class SubjectTokenExchangeAuthenticationDetailProvider
         }
 
         public SubjectTokenExchangeAuthenticationDetailProvider build() {
+            if (tokenExchangeUrl == null || tokenExchangeUrl.trim().isEmpty()) {
+                throw new IllegalArgumentException("Token exchange URL must not be null or empty");
+            }
+            if (subjectTokenSupplier == null) {
+                throw new IllegalArgumentException("Subject token supplier must not be null");
+            }
+            if (clientCredential == null || clientCredential.trim().isEmpty()) {
+                throw new IllegalArgumentException("Client credential must not be null or empty");
+            }
+            if (region == null) {
+                throw new IllegalArgumentException("Region must not be null");
+            }
+
             SessionKeySupplier sessionKeySupplierToUse = sessionKeySupplier != null ? sessionKeySupplier
                     : new SessionKeySupplierImpl();
             this.sessionKeySupplier = new CachingSessionKeySupplier(sessionKeySupplierToUse);
@@ -115,26 +141,38 @@ public class SubjectTokenExchangeAuthenticationDetailProvider
     }
 
     @Override
-    public String refreshAndGetSecurityTokenIfExpiringWithin(Duration time) {
-        if (this.federationClient instanceof ProvidesConfigurableRefresh) {
-            return ((ProvidesConfigurableRefresh) this.federationClient)
-                    .refreshAndGetSecurityTokenIfExpiringWithin(time);
-        }
-        return this.federationClient.refreshAndGetSecurityToken().join();
-    }
-
-    @Override
-    public String refreshAndGetSecurityTokenIfExpiringWithin(Duration time, boolean refreshKeys) {
-        if (this.federationClient instanceof ProvidesConfigurableRefresh) {
-            return ((ProvidesConfigurableRefresh) this.federationClient)
-                    .refreshAndGetSecurityTokenIfExpiringWithin(time, refreshKeys);
-        }
-        return this.federationClient.refreshAndGetSecurityToken().join();
-    }
-
-    @Override
     public String refresh() {
-        return this.federationClient.refreshAndGetSecurityToken().join();
+        try {
+            return federationClient.refreshAndGetSecurityToken().get();
+        } catch (Exception e) {
+            throw new RuntimeException(e.getCause() != null ? e.getCause().getMessage() : e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public String refreshAndGetSecurityTokenIfExpiringWithin(Duration duration) {
+        if (federationClient instanceof AbstractAsyncFederationClient) {
+            try {
+                return ((AbstractAsyncFederationClient) federationClient)
+                        .refreshAndGetSecurityTokenIfExpiringWithin(duration).get();
+            } catch (Exception e) {
+                throw new RuntimeException(e.getCause() != null ? e.getCause().getMessage() : e.getMessage(), e);
+            }
+        }
+        return refresh();
+    }
+
+    @Override
+    public String refreshAndGetSecurityTokenIfExpiringWithin(Duration duration, boolean refreshKeys) {
+        if (federationClient instanceof AbstractAsyncFederationClient) {
+            try {
+                return ((AbstractAsyncFederationClient) federationClient)
+                        .refreshAndGetSecurityTokenIfExpiringWithin(duration, refreshKeys).get();
+            } catch (Exception e) {
+                throw new RuntimeException(e.getCause() != null ? e.getCause().getMessage() : e.getMessage(), e);
+            }
+        }
+        return refresh();
     }
 
     @Override

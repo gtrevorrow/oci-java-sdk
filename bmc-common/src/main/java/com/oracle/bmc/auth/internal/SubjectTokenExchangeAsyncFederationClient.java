@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import java.net.URI;
 import java.security.KeyPair;
 import java.security.interfaces.RSAPublicKey;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
@@ -184,28 +185,33 @@ public class SubjectTokenExchangeAsyncFederationClient extends AbstractAsyncFede
 
         @Override
         public CompletableFuture<String> refreshAndGetSecurityToken() {
-                synchronized (refreshLock) {
-                        LOG.debug("Force refreshing keys and security token from Identity Domain");
-                        // Check for ongoing refresh
-                        if (pendingRefresh != null && !pendingRefresh.isCompletedExceptionally()) {
-                                LOG.debug("Reusing ongoing token refresh operation for forced refresh.");
-                                return pendingRefresh.thenApply(SecurityTokenAdapter::getSecurityToken);
-                        }
-
-                        sessionKeySupplier.refreshKeys();
-                        pendingRefresh = getSecurityTokenFromServer();
-                        return pendingRefresh.thenApply(adapter -> {
-                                synchronized (refreshLock) {
-                                        securityTokenAdapter = adapter;
-                                        return adapter.getSecurityToken();
-                                }
-                        }).whenComplete((result, ex) -> {
-                                synchronized (refreshLock) {
-                                        pendingRefresh = null; // Clear pending refresh
-                                }
-                        });
-                }
+                // Delegate to the parent's coordinated refresh logic
+                return refreshAndGetSecurityTokenInnerAsync(true, Optional.empty(), true);
         }
+        // @Override
+        // public CompletableFuture<String> refreshAndGetSecurityToken() {
+        // synchronized (refreshLock) {
+        // LOG.debug("Force refreshing keys and security token from Identity Domain");
+        // // Check for ongoing refresh
+        // if (pendingRefresh != null && !pendingRefresh.isCompletedExceptionally()) {
+        // LOG.debug("Reusing ongoing token refresh operation for forced refresh.");
+        // return pendingRefresh.thenApply(SecurityTokenAdapter::getSecurityToken);
+        // }
+
+        // sessionKeySupplier.refreshKeys();
+        // pendingRefresh = getSecurityTokenFromServer();
+        // return pendingRefresh.thenApply(adapter -> {
+        // synchronized (refreshLock) {
+        // securityTokenAdapter = adapter;
+        // return adapter.getSecurityToken();
+        // }
+        // }).whenComplete((result, ex) -> {
+        // synchronized (refreshLock) {
+        // pendingRefresh = null; // Clear pending refresh
+        // }
+        // });
+        // }
+        // }
 
         @Override
         public String getStringClaim(String key) {

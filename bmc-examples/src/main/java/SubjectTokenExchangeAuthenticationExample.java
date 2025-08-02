@@ -68,13 +68,13 @@ public class SubjectTokenExchangeAuthenticationExample {
         System.out.println("Configuring AuthenticationDetailsProvider...");
 
         // Example: Dynamic supplier fetching token from an external source
-        Supplier<String> dynamicSubjectTokenSupplier = () -> {
-            String token = System.getenv("OCI_SUBJECT_TOKEN");
-            if (token == null || token.isEmpty()) {
-                throw new IllegalStateException("Failed to fetch subject token");
-            }
-            return token;
-        };
+        // Supplier<String> dynamicSubjectTokenSupplier = () -> {
+        // String token = System.getenv("OCI_SUBJECT_TOKEN");
+        // if (token == null || token.isEmpty()) {
+        // throw new IllegalStateException("Failed to fetch subject token");
+        // }
+        // return token;
+        // };
 
         // Build the SubjectTokenExchangeAuthenticationDetailProvider
         System.out.println("Building SubjectTokenExchangeAuthenticationDetailProvider...");
@@ -82,7 +82,13 @@ public class SubjectTokenExchangeAuthenticationExample {
                 .tokenExchangeUrl(tokenExchangeUrl)
                 .clientCredential(clientCredential)
                 .region(Region.fromRegionId(regionId))
-                .subjectTokenSupplier(dynamicSubjectTokenSupplier)
+                .subjectTokenSupplier(() -> { // example fetch the subject token dynamically using a lambda
+                    String token = System.getenv("OCI_SUBJECT_TOKEN");
+                    if (token == null || token.isEmpty()) {
+                        throw new IllegalStateException("Failed to fetch subject token");
+                    }
+                    return token;
+                })
                 .build();
         System.out.println("SubjectTokenExchangeAuthenticationDetailProvider built successfully.");
 
