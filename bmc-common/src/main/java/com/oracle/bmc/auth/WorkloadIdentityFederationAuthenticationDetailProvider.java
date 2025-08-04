@@ -15,12 +15,10 @@ import com.oracle.bmc.auth.AbstractRequestingAuthenticationDetailsProvider.Cachi
 import com.oracle.bmc.auth.internal.AsyncFederationClient;
 import com.oracle.bmc.auth.internal.WorkloadIdentityFederationClient;
 import com.oracle.bmc.circuitbreaker.CircuitBreakerConfiguration;
-import com.oracle.bmc.http.ClientConfigurator;
 
 import java.io.ByteArrayInputStream;
 import java.util.Base64;
 import java.util.Collections;
-import java.util.List;
 
 import org.slf4j.Logger;
 
@@ -29,8 +27,8 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
         implements BasicAuthenticationDetailsProvider, RegionProvider, RefreshableOnNotAuthenticatedProvider<String>,
         ProvidesConfigurableRefresh {
 
-    private AsyncFederationClient federationClient;
-    private SessionKeySupplier sessionKeySupplier;
+    private final AsyncFederationClient federationClient;
+    private final SessionKeySupplier sessionKeySupplier;
     private final Region region;
 
     public WorkloadIdentityFederationAuthenticationDetailProvider(AsyncFederationClient federationClient,

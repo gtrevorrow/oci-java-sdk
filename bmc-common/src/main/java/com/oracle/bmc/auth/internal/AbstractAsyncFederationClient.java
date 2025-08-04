@@ -3,22 +3,7 @@
  * This software is dual-licensed to you under the Universal Permissive License (UPL) 1.0 as shown at https://oss.oracle.com/licenses/upl or Apache License 2.0 as shown at http://www.apache.org/licenses/LICENSE-2.0. You may choose either license.
  */
 
-/**
- * Abstract base class for asynchronous federation clients that handle security token retrieval and refresh logic.
- * <p>
- * This class manages the lifecycle of security tokens, including refreshing tokens when they are about to expire,
- * and optionally refreshing session keys. It ensures that only one token refresh operation is in progress at any time,
- * and provides mechanisms to reuse pending refresh operations.
- * The class is thread-safe and uses a lock to synchronize access to the refresh logic.
- * </p>
- *
- * <p>
- * Subclasses must implement {@link #getSecurityTokenFromServer()} to define how security tokens are fetched from the server.
- * </p>
- *
- * @see AsyncFederationClient
- * @see ProvidesConfigurableRefreshAsync
- */
+
 package com.oracle.bmc.auth.internal;
 
 import java.time.Duration;
@@ -37,7 +22,22 @@ import org.slf4j.Logger;
 import java.net.URI;
 import java.util.List;
 import java.util.Optional;
-
+/**
+ * Abstract base class for asynchronous federation clients that handle security token retrieval and refresh logic.
+ * <p>
+ * This class manages the lifecycle of security tokens, including refreshing tokens when they are about to expire,
+ * and optionally refreshing session keys. It ensures that only one token refresh operation is in progress at any time,
+ * and provides mechanisms to reuse pending refresh operations.
+ * The class is thread-safe and uses a lock to synchronize access to the refresh logic.
+ * </p>
+ *
+ * <p>
+ * Subclasses must implement {@link #getSecurityTokenFromServer()} to define how security tokens are fetched from the server.
+ * </p>
+ *
+ * @see AsyncFederationClient
+ * @see ProvidesConfigurableRefreshAsync
+ */
 public abstract class AbstractAsyncFederationClient
         implements AsyncFederationClient, ProvidesConfigurableRefreshAsync {
     private static final Logger LOG = org.slf4j.LoggerFactory.getLogger(AbstractAsyncFederationClient.class);
@@ -88,13 +88,14 @@ public abstract class AbstractAsyncFederationClient
     @Override
     public CompletableFuture<String> refreshAndGetSecurityTokenIfExpiringWithin(
             Duration time, boolean refreshKeys) {
-        return refreshAndGetSecurityTokenInnerAsync(true, Optional.of(time), refreshKeys);
+        return refreshAndGetSecurityTokenInnerAsync(true, time, refreshKeys);
     }
 
+    @SuppressWarnings("ConstantConditions")
     protected CompletableFuture<String> refreshAndGetSecurityTokenInnerAsync(
-            final boolean doFinalTokenValidityCheck, Optional<Duration> time, boolean refreshKeys) {
+            final boolean doFinalTokenValidityCheck, Duration time, boolean refreshKeys) {
         // double-check locking ...First check if the token is valid
-        boolean isValid = securityTokenAdapter.isValid(time);
+        boolean isValid = securityTokenAdapter.isValid(Optional.ofNullable(time));
 
         if (doFinalTokenValidityCheck && isValid) {
             LOG.debug("Token is valid, returning existing token");
@@ -129,13 +130,9 @@ public abstract class AbstractAsyncFederationClient
     }
 
     public CompletableFuture<String> refreshAndGetSecurityToken() {
-        return refreshAndGetSecurityTokenInnerAsync(true, Optional.empty(), true);
+        return refreshAndGetSecurityTokenInnerAsync(true, null, true);
     }
 
-    // this is for testing only
-    public void setSecurityTokenAdapter(SecurityTokenAdapter securityTokenAdapter) {
-        this.securityTokenAdapter = securityTokenAdapter;
-    }
 
     /**
      * Gets a security token from the federation endpoint. This will be a long-lived

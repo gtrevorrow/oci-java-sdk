@@ -17,7 +17,6 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
@@ -52,24 +51,7 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
                 tokenExchangeEndpoint);
     }
 
-    public WorkloadIdentityFederationClient(
-            String tokenExchangeEndpoint,
-            Supplier<String> subjectTokenSupplier,
-            SessionKeySupplier sessionKeySupplier,
-            String clientCredentials,
-            ClientConfigurator clientConfigurator,
-            CircuitBreakerConfiguration circuitBreakerConfiguration,
-            List<ClientConfigurator> additionalClientConfigurators) {
-        this(
-                tokenExchangeEndpoint,
-                subjectTokenSupplier,
-                sessionKeySupplier,
-                clientCredentials,
-                clientConfigurator,
-                circuitBreakerConfiguration,
-                additionalClientConfigurators,
-                null);
-    }
+
 
     public WorkloadIdentityFederationClient(
             String tokenExchangeEndpoint,
@@ -87,22 +69,6 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
                 null);
     }
 
-    public WorkloadIdentityFederationClient(
-            String tokenExchangeEndpoint,
-            Supplier<String> subjectTokenSupplier,
-            SessionKeySupplier sessionKeySupplier,
-            String clientCredentials,
-            Long secondsToExpireSessionTokenEarly) {
-        this(
-                tokenExchangeEndpoint,
-                subjectTokenSupplier,
-                sessionKeySupplier,
-                clientCredentials,
-                null,
-                null,
-                Collections.emptyList(),
-                secondsToExpireSessionTokenEarly);
-    }
 
     @Override
     public CompletableFuture<String> getSecurityToken() {
@@ -232,7 +198,7 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
     @Override
     public CompletableFuture<String> refreshAndGetSecurityToken() {
         // Delegate to the parent's coordinated refresh logic
-        return refreshAndGetSecurityTokenInnerAsync(true, Optional.empty(), true);
+        return refreshAndGetSecurityTokenInnerAsync(true, null, true);
     }
 
     @Override
