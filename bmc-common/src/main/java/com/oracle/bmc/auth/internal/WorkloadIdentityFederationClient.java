@@ -77,7 +77,7 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
     }
 
     @Override
-    public CompletableFuture<SecurityTokenAdapter> getSecurityTokenFromServer() {
+    protected CompletableFuture<SecurityTokenAdapter> getSecurityTokenFromServer() {
         LOG.info("getSecurityTokenFromServer called, getting session token from Identity Domain");
 
         try {

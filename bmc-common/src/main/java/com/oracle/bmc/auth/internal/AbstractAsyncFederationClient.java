@@ -78,7 +78,7 @@ public abstract class AbstractAsyncFederationClient
                 sessionKeySupplier);
     }
 
-    public abstract CompletableFuture<SecurityTokenAdapter> getSecurityTokenFromServer();
+    protected abstract CompletableFuture<SecurityTokenAdapter> getSecurityTokenFromServer();
 
     @Override
     public CompletableFuture<String> refreshAndGetSecurityTokenIfExpiringWithin(Duration time) {

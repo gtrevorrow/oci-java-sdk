@@ -1,22 +1,22 @@
 package com.oracle.bmc.auth;
 
+import com.oracle.bmc.auth.internal.AbstractAsyncFederationClient;
+
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.NoSuchAlgorithmException;
 
 /**
- * This is a helper class to generate in-memory temporary session keys.
- *
+ * Helper class to generate in-memory temporary session keys.
+ * Decoupled from AbstractRequestingAuthenticationDetailsProvider for better modularity.
  * <p>
- * The thread safety of this class is ensured through the Caching class above
- * which
- * synchronizes on all methods.
- *
+ * WARNING: This class is NOT thread-safe. Concurrent access to getKeyPair() and refreshKeys()
+ * can cause race conditions. Callers must provide external synchronization in multithreaded
+ * environments.
  * <p>
- * The class is implemented in a lazy way to avoid generating the key if it is
- * not needed or
- * if refresh is immediately called.
+ * Implementation uses lazy initialization to avoid generating keys unnecessarily.
  */
+
 class SessionKeySupplierImpl implements SessionKeySupplier {
     private static final KeyPairGenerator GENERATOR;
     private KeyPair keyPair = null;
