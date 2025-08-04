@@ -11,7 +11,6 @@ import java.util.function.Supplier;
 
 import com.oracle.bmc.Region;
 import com.oracle.bmc.auth.internal.AuthUtils;
-import com.oracle.bmc.auth.AbstractRequestingAuthenticationDetailsProvider.CachingSessionKeySupplier;
 import com.oracle.bmc.auth.internal.AsyncFederationClient;
 import com.oracle.bmc.auth.internal.WorkloadIdentityFederationClient;
 import com.oracle.bmc.circuitbreaker.CircuitBreakerConfiguration;
@@ -297,8 +296,12 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
 
     @Override
     public InputStream getPrivateKey() {
-        return new ByteArrayInputStream(
-                AuthUtils.toByteArrayFromRSAPrivateKey((RSAPrivateKey) sessionKeySupplier.getKeyPair().getPrivate()));
+        if (sessionKeySupplier instanceof CachingSessionKeySupplier) {
+            return new ByteArrayInputStream(((CachingSessionKeySupplier) sessionKeySupplier).getPrivateKeyBytes());
+        } else {
+            return new ByteArrayInputStream(
+                    AuthUtils.toByteArrayFromRSAPrivateKey((RSAPrivateKey) sessionKeySupplier.getKeyPair().getPrivate()));
+        }
     }
 
     @Override
