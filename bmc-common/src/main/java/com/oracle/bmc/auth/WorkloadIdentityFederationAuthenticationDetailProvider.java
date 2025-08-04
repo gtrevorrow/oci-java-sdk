@@ -12,7 +12,6 @@ import java.util.function.Supplier;
 import com.oracle.bmc.Region;
 import com.oracle.bmc.auth.internal.AuthUtils;
 import com.oracle.bmc.auth.AbstractRequestingAuthenticationDetailsProvider.CachingSessionKeySupplier;
-import com.oracle.bmc.auth.internal.AbstractAsyncFederationClient;
 import com.oracle.bmc.auth.internal.AsyncFederationClient;
 import com.oracle.bmc.auth.internal.WorkloadIdentityFederationClient;
 import com.oracle.bmc.circuitbreaker.CircuitBreakerConfiguration;
@@ -20,6 +19,7 @@ import com.oracle.bmc.http.ClientConfigurator;
 
 import java.io.ByteArrayInputStream;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -74,9 +74,7 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
      * <b>Optional Setters:</b>
      * <ul>
      * <li>{@link #secondsToExpireSessionTokenEarly(Long)}</li>
-     * <li>{@link #clientConfigurator(ClientConfigurator)}</li>
-     * <li>{@link #circuitBreakerConfiguration(CircuitBreakerConfiguration)}</li>
-     * <li>{@link #additionalClientConfigurators(List)}</li>
+     * <li>{@link #withCircuitBreaker()}</li>
      * </ul>
      */
     public static class WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
@@ -88,9 +86,8 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
         private Supplier<String> subjectTokenSupplier;
         private String clientCredential;
         private Long secondsToExpireSessionTokenEarly; // Default to 5 minutes early expiration
-        private ClientConfigurator clientConfigurator;
-        private CircuitBreakerConfiguration circuitBreakerConfiguration;
-        private List<ClientConfigurator> additionalClientConfigurators = new java.util.ArrayList<>();
+        private boolean withCircuitBreaker = false;
+
         private static final Logger LOG = org.slf4j.LoggerFactory
                 .getLogger(WorkloadIdentityFederationAuthenticationDetailProviderBuilder.class);
 
@@ -105,50 +102,26 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
          */
         protected AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
             if (this.federationClient == null) {
+                CircuitBreakerConfiguration circuitBreakerConfig = null;
+                if (withCircuitBreaker) {
+                    LOG.debug("Enabling default circuit breaker for federation client.");
+                    circuitBreakerConfig = CircuitBreakerConfiguration.builder().build();
+                }
+
                 this.federationClient = new WorkloadIdentityFederationClient(
-                        tokenExchangeUrl, subjectTokenSupplier, sessionKeySupplier, clientCredential,
-                        clientConfigurator, circuitBreakerConfiguration, additionalClientConfigurators);
-                LOG.debug("WorkloadIdentityFederationClient created with early expiration: {} seconds",
+                        tokenExchangeUrl,
+                        subjectTokenSupplier,
+                        sessionKeySupplier,
+                        clientCredential,
+                        null, // No custom client configurator
+                        circuitBreakerConfig,
+                        Collections.emptyList(), // No additional client configurators
+                        secondsToExpireSessionTokenEarly);
+                LOG.debug(
+                        "WorkloadIdentityFederationClient created with early expiration: {} seconds",
                         this.secondsToExpireSessionTokenEarly);
             }
             return this.federationClient;
-        }
-
-        /**
-         * Sets the client configurator (optional).
-         * 
-         * @param clientConfigurator the client configurator
-         * @return this builder
-         */
-        public WorkloadIdentityFederationAuthenticationDetailProviderBuilder clientConfigurator(
-                ClientConfigurator clientConfigurator) {
-            this.clientConfigurator = clientConfigurator;
-            return this;
-        }
-
-        /**
-         * Sets the circuit breaker configuration (optional).
-         * If not provided, a default circuit breaker configuration will be used.
-         * 
-         * @param circuitBreakerConfiguration the circuit breaker configuration
-         * @return this builder
-         */
-        public WorkloadIdentityFederationAuthenticationDetailProviderBuilder circuitBreakerConfiguration(
-                CircuitBreakerConfiguration circuitBreakerConfiguration) {
-            this.circuitBreakerConfiguration = circuitBreakerConfiguration;
-            return this;
-        }
-
-        /**
-         * Sets the additional client configurators (optional).
-         * 
-         * @param additionalClientConfigurators the additional client configurators
-         * @return this builder
-         */
-        public WorkloadIdentityFederationAuthenticationDetailProviderBuilder additionalClientConfigurators(
-                List<ClientConfigurator> additionalClientConfigurators) {
-            this.additionalClientConfigurators = additionalClientConfigurators;
-            return this;
         }
 
         /**
@@ -242,6 +215,16 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
         }
 
         /**
+         * Enables a default circuit breaker for the federation client.
+         *
+         * @return this builder
+         */
+        public WorkloadIdentityFederationAuthenticationDetailProviderBuilder withCircuitBreaker() {
+            this.withCircuitBreaker = true;
+            return this;
+        }
+
+        /**
          * Builds the {@link WorkloadIdentityFederationAuthenticationDetailProvider}.
          * All required fields must be set before calling this method.
          *
@@ -286,28 +269,22 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
 
     @Override
     public String refreshAndGetSecurityTokenIfExpiringWithin(Duration duration) {
-        if (federationClient instanceof AbstractAsyncFederationClient) {
-            try {
-                return ((AbstractAsyncFederationClient) federationClient)
-                        .refreshAndGetSecurityTokenIfExpiringWithin(duration).get();
-            } catch (Exception e) {
-                throw new RuntimeException(e.getCause() != null ? e.getCause().getMessage() : e.getMessage(), e);
-            }
+        try {
+            return ((ProvidesConfigurableRefresh) federationClient)
+                    .refreshAndGetSecurityTokenIfExpiringWithin(duration);
+        } catch (Exception e) {
+            throw new RuntimeException(e.getCause() != null ? e.getCause().getMessage() : e.getMessage(), e);
         }
-        return refresh();
     }
 
     @Override
     public String refreshAndGetSecurityTokenIfExpiringWithin(Duration duration, boolean refreshKeys) {
-        if (federationClient instanceof AbstractAsyncFederationClient) {
-            try {
-                return ((AbstractAsyncFederationClient) federationClient)
-                        .refreshAndGetSecurityTokenIfExpiringWithin(duration, refreshKeys).get();
-            } catch (Exception e) {
-                throw new RuntimeException(e.getCause() != null ? e.getCause().getMessage() : e.getMessage(), e);
-            }
+        try {
+            return ((ProvidesConfigurableRefresh) federationClient)
+                    .refreshAndGetSecurityTokenIfExpiringWithin(duration, refreshKeys);
+        } catch (Exception e) {
+            throw new RuntimeException(e.getCause() != null ? e.getCause().getMessage() : e.getMessage(), e);
         }
-        return refresh();
     }
 
     @Override

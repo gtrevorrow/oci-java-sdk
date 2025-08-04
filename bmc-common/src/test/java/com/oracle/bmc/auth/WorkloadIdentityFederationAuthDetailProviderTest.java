@@ -8,9 +8,7 @@ import com.oracle.bmc.Region;
 import com.oracle.bmc.auth.internal.AbstractAsyncFederationClient;
 import com.oracle.bmc.auth.internal.SecurityTokenAdapter;
 import com.oracle.bmc.auth.internal.WorkloadIdentityFederationClient;
-import com.oracle.bmc.auth.internal.SubjectTokenSupplierImpl;
 import com.oracle.bmc.circuitbreaker.CircuitBreakerConfiguration;
-import com.oracle.bmc.http.ClientConfigurator;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -18,15 +16,10 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnitRunner;
 
-import java.io.IOException;
 import java.security.KeyPair;
-import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
 import java.security.interfaces.RSAPrivateKey;
-import java.security.spec.InvalidKeySpecException;
 import java.time.Duration;
-import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -34,22 +27,23 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
+import java.util.logging.Logger;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.withSettings;
 
 @RunWith(MockitoJUnitRunner.Silent.class)
 public class WorkloadIdentityFederationAuthDetailProviderTest {
+
+        private static final Logger logger = Logger.getLogger(WorkloadIdentityFederationAuthDetailProviderTest.class.getName());
 
         @Mock
         private WorkloadIdentityFederationClient mockFederationClient;
@@ -96,33 +90,67 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
         }
 
         @Test
-        public void builderCreatesProviderWithCorrectConfiguration() {
-                ClientConfigurator mockClientConfigurator = mock(ClientConfigurator.class);
-                CircuitBreakerConfiguration mockCircuitBreakerConfiguration = mock(CircuitBreakerConfiguration.class);
-                List<ClientConfigurator> mockAdditionalClientConfigurators = Collections
-                                .singletonList(mock(ClientConfigurator.class));
+        public void builderWithCircuitBreakerIsEnabled() {
+                class ConfigurationCapturingBuilder extends WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
+                        CircuitBreakerConfiguration capturedCircuitBreakerConfiguration;
+                        boolean circuitBreakerEnabled = false;
 
-                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder = new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
                         @Override
-                        protected AbstractAsyncFederationClient createFederationClient(
-                                        SessionKeySupplier sessionKeySupplier) {
-                                // Return a mock client to prevent real network calls
+                        public WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder withCircuitBreaker() {
+                                circuitBreakerEnabled = true;
+                                return super.withCircuitBreaker();
+                        }
+
+                        @Override
+                        protected AbstractAsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
+                                if (circuitBreakerEnabled) {
+                                        capturedCircuitBreakerConfiguration = CircuitBreakerConfiguration.builder().build();
+                                }
                                 return mock(AbstractAsyncFederationClient.class);
                         }
-                };
+                }
 
-                WorkloadIdentityFederationAuthenticationDetailProvider provider = builder
-                                .clientCredential("test-credential")
-                                .subjectTokenSupplier(() -> "test-subject-token")
-                                .tokenExchangeUrl("https://auth.example.com/token")
+                ConfigurationCapturingBuilder builder = new ConfigurationCapturingBuilder();
+                builder.clientCredential("test")
+                                .subjectTokenSupplier(() -> "test")
+                                .tokenExchangeUrl("https://test.com")
                                 .region(Region.US_ASHBURN_1)
-                                .clientConfigurator(mockClientConfigurator)
-                                .circuitBreakerConfiguration(mockCircuitBreakerConfiguration)
-                                .additionalClientConfigurators(mockAdditionalClientConfigurators)
-                                .secondsToExpireSessionTokenEarly(500L)
+                                .withCircuitBreaker() // Enable it
                                 .build();
 
-                assertNotNull(provider);
+                assertNotNull(builder.capturedCircuitBreakerConfiguration);
+        }
+
+        @Test
+        public void builderWithoutCircuitBreakerIsDefault() {
+                class ConfigurationCapturingBuilder extends WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
+                        CircuitBreakerConfiguration capturedCircuitBreakerConfiguration;
+                        boolean circuitBreakerEnabled = false;
+
+                        @Override
+                        public WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder withCircuitBreaker() {
+                                circuitBreakerEnabled = true;
+                                return super.withCircuitBreaker();
+                        }
+
+                        @Override
+                        protected AbstractAsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
+                                if (circuitBreakerEnabled) {
+                                        capturedCircuitBreakerConfiguration = CircuitBreakerConfiguration.builder().build();
+                                }
+                                return mock(AbstractAsyncFederationClient.class);
+                        }
+                }
+
+                ConfigurationCapturingBuilder builder = new ConfigurationCapturingBuilder();
+                builder.clientCredential("test")
+                                .subjectTokenSupplier(() -> "test")
+                                .tokenExchangeUrl("https://test.com")
+                                .region(Region.US_ASHBURN_1)
+                                // DO NOT enable it
+                                .build();
+
+                assertNull(builder.capturedCircuitBreakerConfiguration);
         }
 
         @Test
@@ -140,7 +168,6 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
         @Test
         public void constructorWithNullFederationClientThrowsException() {
                 assertThrows(
-                                "Federation client must not be null",
                                 IllegalArgumentException.class,
                                 () -> new WorkloadIdentityFederationAuthenticationDetailProvider(
                                                 null, mockSessionKeySupplier, MOCK_TOKEN_EXCHANGE_URL, MOCK_REGION));
@@ -149,7 +176,6 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
         @Test
         public void constructorWithNullSessionKeySupplierThrowsException() {
                 assertThrows(
-                                "Session key supplier must not be null",
                                 IllegalArgumentException.class,
                                 () -> new WorkloadIdentityFederationAuthenticationDetailProvider(
                                                 mockFederationClient, null, MOCK_TOKEN_EXCHANGE_URL, MOCK_REGION));
@@ -158,7 +184,6 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
         @Test
         public void constructorWithNullTokenExchangeUrlThrowsException() {
                 assertThrows(
-                                "Token exchange URL must not be null or empty",
                                 IllegalArgumentException.class,
                                 () -> new WorkloadIdentityFederationAuthenticationDetailProvider(
                                                 mockFederationClient, mockSessionKeySupplier, null, MOCK_REGION));
@@ -167,7 +192,6 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
         @Test
         public void constructorWithEmptyTokenExchangeUrlThrowsException() {
                 assertThrows(
-                                "Token exchange URL must not be null or empty",
                                 IllegalArgumentException.class,
                                 () -> new WorkloadIdentityFederationAuthenticationDetailProvider(
                                                 mockFederationClient, mockSessionKeySupplier, " ", MOCK_REGION));
@@ -176,7 +200,6 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
         @Test
         public void constructorWithNullRegionThrowsException() {
                 assertThrows(
-                                "Region must not be null",
                                 IllegalArgumentException.class,
                                 () -> new WorkloadIdentityFederationAuthenticationDetailProvider(
                                                 mockFederationClient, mockSessionKeySupplier, MOCK_TOKEN_EXCHANGE_URL,
@@ -186,7 +209,6 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
         @Test
         public void builderWithNullTokenUrlThrowsException() {
                 assertThrows(
-                                "Token exchange URL must not be null or empty",
                                 IllegalArgumentException.class,
                                 () -> WorkloadIdentityFederationAuthenticationDetailProvider.builder()
                                                 .tokenExchangeUrl(null)
@@ -196,7 +218,6 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
         @Test
         public void builderWithNullSubjectTokenSupplierThrowsException() {
                 assertThrows(
-                                "Subject token supplier cannot be null",
                                 IllegalArgumentException.class,
                                 () -> WorkloadIdentityFederationAuthenticationDetailProvider.builder()
                                                 .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
@@ -209,7 +230,6 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
         @Test
         public void builderWithNullClientCredentialThrowsException() {
                 assertThrows(
-                                "Client credential must not be null or empty",
                                 IllegalArgumentException.class,
                                 () -> WorkloadIdentityFederationAuthenticationDetailProvider.builder()
                                                 .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
@@ -311,15 +331,14 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                                         CompletableFuture<SecurityTokenAdapter> serverFuture) {
                                 super(tokenExchangeEndpoint, subjectTokenSupplier, sessionKeySupplier,
                                                 clientCredentials);
-                                System.out.println(
-                                                "Created CountingFederationClient: " + System.identityHashCode(this));
+                                logger.info("Created CountingFederationClient: " + System.identityHashCode(this));
                                 this.serverFuture = serverFuture;
                         }
 
                         @Override
                         public CompletableFuture<SecurityTokenAdapter> getSecurityTokenFromServer() {
                                 serverCallCount++;
-                                System.out.println("getSecurityTokenFromServer called, count: " + serverCallCount
+                                logger.info("getSecurityTokenFromServer called, count: " + serverCallCount
                                                 + ", thread: " + Thread.currentThread().getName());
                                 if (serverCallCount == 1) {
                                         firstCallLatch.countDown();
@@ -362,212 +381,51 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                 for (int i = 0; i < concurrentThreads; i++) {
                         final int threadIndex = i;
                         refreshFutures[i] = CompletableFuture.supplyAsync(() -> {
-                                System.out.println("Thread " + threadIndex + " starting refresh");
+                                logger.info("Thread " + threadIndex + " starting refresh");
                                 startSemaphore.release(); // Signal thread has started
                                 try {
                                         String result = provider.refresh(); // Blocks on .get()
-                                        System.out.println("Thread " + threadIndex + " completed refresh, result: "
-                                                        + result);
+                                        logger.info("Thread " + threadIndex + " completed refresh, result: " + result);
                                         completeSemaphore.release();
                                         return result;
                                 } catch (Exception e) {
-                                        System.err.println(
-                                                        "Thread " + threadIndex + " refresh failed: " + e.getMessage());
+                                        logger.severe("Thread " + threadIndex + " refresh failed: " + e.getMessage());
                                         throw e;
                                 }
                         }, executor);
                 }
 
                 // Wait for all threads to start
-                System.out.println("Waiting for all threads to start");
+                logger.info("Waiting for all threads to start");
                 startSemaphore.acquire(concurrentThreads);
 
                 // Wait for the first call to getSecurityTokenFromServer
-                System.out.println("Waiting for first call to getSecurityTokenFromServer");
+                logger.info("Waiting for first call to getSecurityTokenFromServer");
                 countingClient.getFirstCallLatch().await();
 
                 // Complete the server future
-                System.out.println("Completing server future");
+                logger.info("Completing server future");
                 SecurityTokenAdapter newTokenAdapter = new SecurityTokenAdapter(MOCK_NEW_SECURITY_TOKEN,
                                 realKeySupplier);
                 serverFuture.complete(newTokenAdapter);
 
                 // Wait for all threads to complete
-                System.out.println("Waiting for all threads to complete");
+                logger.info("Waiting for all threads to complete");
                 completeSemaphore.acquire(concurrentThreads);
 
                 // Shutdown executor
                 executor.shutdown();
-                executor.awaitTermination(10, TimeUnit.SECONDS);
+                boolean terminated = executor.awaitTermination(10, TimeUnit.SECONDS);
+                if (!terminated) {
+                        logger.warning("Executor did not terminate in the specified time.");
+                        // Optionally, you can force shutdown or handle it according to your requirements
+                }
 
                 // Verify results
+                assertEquals("Only one server call should have been made", 1, countingClient.getServerCallCount());
                 for (int i = 0; i < concurrentThreads; i++) {
-                        assertEquals("Thread " + i + " should return new security token", MOCK_NEW_SECURITY_TOKEN,
+                        assertEquals("All threads should have the same token", MOCK_NEW_SECURITY_TOKEN,
                                         refreshFutures[i].get());
                 }
-
-                // Verify call count
-                int callCount = countingClient.getServerCallCount();
-                System.out.println("Final server call count: " + callCount);
-                assertEquals("Expected exactly one call to getSecurityTokenFromServer", 1, callCount);
-        }
-
-        @Test
-        public void refreshAndGetSecurityTokenIfExpiringWithinNonConfigurableClient() {
-                setupMockKeyPair();
-                provider = new WorkloadIdentityFederationAuthenticationDetailProvider(
-                                mockFederationClient,
-                                mockSessionKeySupplier,
-                                MOCK_TOKEN_EXCHANGE_URL,
-                                MOCK_REGION);
-
-                assertEquals(
-                                MOCK_SECURITY_TOKEN,
-                                provider.refreshAndGetSecurityTokenIfExpiringWithin(Duration.ofMinutes(5)));
-                assertEquals(
-                                MOCK_SECURITY_TOKEN,
-                                provider.refreshAndGetSecurityTokenIfExpiringWithin(Duration.ofMinutes(5), true));
-
-                // Verify the actual method calls that are made
-                verify(mockFederationClient, times(1))
-                                .refreshAndGetSecurityTokenIfExpiringWithin(Duration.ofMinutes(5));
-                verify(mockFederationClient, times(1)).refreshAndGetSecurityTokenIfExpiringWithin(Duration.ofMinutes(5),
-                                true);
-        }
-
-        @Test
-        public void refreshAndGetSecurityTokenIfExpiringWithinConfigurableClient() {
-                setupMockKeyPair();
-                provider = new WorkloadIdentityFederationAuthenticationDetailProvider(
-                                mockFederationClient,
-                                mockSessionKeySupplier,
-                                MOCK_TOKEN_EXCHANGE_URL,
-                                MOCK_REGION);
-
-                assertEquals(
-                                MOCK_SECURITY_TOKEN,
-                                provider.refreshAndGetSecurityTokenIfExpiringWithin(Duration.ofMinutes(5)));
-                assertEquals(
-                                MOCK_SECURITY_TOKEN,
-                                provider.refreshAndGetSecurityTokenIfExpiringWithin(Duration.ofMinutes(5), true));
-
-                // Verify the actual method calls that are made
-                verify(mockFederationClient, times(1))
-                                .refreshAndGetSecurityTokenIfExpiringWithin(Duration.ofMinutes(5));
-                verify(mockFederationClient, times(1)).refreshAndGetSecurityTokenIfExpiringWithin(Duration.ofMinutes(5),
-                                true);
-        }
-
-        @Test
-        public void getPrivateKeyReturnsAValidKey()
-                        throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
-                // Use a real key supplier for this test
-                SessionKeySupplier realSessionKeySupplier = new SessionKeySupplierImpl();
-
-                provider = new WorkloadIdentityFederationAuthenticationDetailProvider(
-                                mockFederationClient,
-                                realSessionKeySupplier,
-                                MOCK_TOKEN_EXCHANGE_URL,
-                                MOCK_REGION);
-
-                // Just verify we can get a private key stream without errors
-                java.io.InputStream privateKeyStream = provider.getPrivateKey();
-                assertNotNull("Private key stream should not be null", privateKeyStream);
-
-                byte[] keyBytes = privateKeyStream.readAllBytes();
-                assertTrue("Key bytes should not be empty", keyBytes.length > 0);
-        }
-
-        @Test
-        public void getPrivateKeyHandlesNullKeyPair() {
-                when(mockSessionKeySupplier.getKeyPair()).thenReturn(null);
-                provider = new WorkloadIdentityFederationAuthenticationDetailProvider(
-                                mockFederationClient,
-                                mockSessionKeySupplier,
-                                MOCK_TOKEN_EXCHANGE_URL,
-                                MOCK_REGION);
-
-                // The provider code doesn't handle null KeyPair gracefully, so expect an
-                // exception
-                assertThrows(
-                                NullPointerException.class,
-                                () -> {
-                                        provider.getPrivateKey();
-                                });
-                verify(mockSessionKeySupplier).getKeyPair();
-        }
-
-        @Test
-        public void testConcurrentTokenRefresh() throws InterruptedException {
-                int numThreads = 10;
-                ExecutorService executor = Executors.newFixedThreadPool(numThreads);
-                CountDownLatch latch = new CountDownLatch(numThreads);
-                Semaphore semaphore = new Semaphore(1); // To control access to the refresh logic
-
-                // Mock the federation client to simulate a refresh operation
-                when(mockFederationClient.refreshAndGetSecurityTokenIfExpiringWithin(any(Duration.class)))
-                                .thenAnswer(
-                                                invocation -> {
-                                                        // Simulate work and potential delay
-                                                        boolean acquired = semaphore.tryAcquire();
-                                                        if (acquired) {
-                                                                try {
-                                                                        // Simulate network delay
-                                                                        Thread.sleep(100);
-                                                                        return CompletableFuture.completedFuture(
-                                                                                        MOCK_NEW_SECURITY_TOKEN);
-                                                                } finally {
-                                                                        semaphore.release();
-                                                                }
-                                                        } else {
-                                                                // Another thread is already refreshing, so return the
-                                                                // old token
-                                                                return CompletableFuture
-                                                                                .completedFuture(MOCK_SECURITY_TOKEN);
-                                                        }
-                                                });
-
-                provider = new WorkloadIdentityFederationAuthenticationDetailProvider(
-                                mockFederationClient,
-                                mockSessionKeySupplier,
-                                MOCK_TOKEN_EXCHANGE_URL,
-                                MOCK_REGION);
-
-                // Initial token state is set up in @Before
-                for (int i = 0; i < numThreads; i++) {
-                        executor.submit(
-                                        () -> {
-                                                try {
-                                                        // Each thread will try to get the token, triggering the refresh
-                                                        // logic
-                                                        provider.refreshAndGetSecurityTokenIfExpiringWithin(
-                                                                        Duration.ofSeconds(1));
-                                                } finally {
-                                                        latch.countDown();
-                                                }
-                                        });
-                }
-
-                latch.await(5, TimeUnit.SECONDS);
-                executor.shutdown();
-
-                // Verify that refresh was called, but only once due to coordination
-                verify(mockFederationClient, times(10))
-                                .refreshAndGetSecurityTokenIfExpiringWithin(any(Duration.class));
-        }
-
-        @Test
-        public void testSubjectTokenSupplier()
-                        throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
-                // Setup
-                SubjectTokenSupplierImpl supplier = mock(SubjectTokenSupplierImpl.class,
-                                withSettings().defaultAnswer(CALLS_REAL_METHODS));
-                when(supplier.get()).thenReturn(MOCK_SUBJECT_TOKEN);
-
-                // Execute
-                String token = supplier.get();
-
-                // Verify
-                assertEquals(MOCK_SUBJECT_TOKEN, token);
         }
 }

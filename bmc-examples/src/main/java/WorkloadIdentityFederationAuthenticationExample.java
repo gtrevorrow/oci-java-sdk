@@ -1,4 +1,3 @@
-
 /**
  * Copyright (c) 2016, 2025, Oracle and/or its affiliates.  All rights reserved.
  * This software is dual-licensed to you under the Universal Permissive License (UPL) 1.0 as shown at https://oss.oracle.com/licenses/upl or Apache License 2.0 as shown at http://www.apache.org/licenses/LICENSE-2.0. You may choose either license.
@@ -9,100 +8,103 @@ import com.oracle.bmc.auth.WorkloadIdentityFederationAuthenticationDetailProvide
 import com.oracle.bmc.objectstorage.ObjectStorageClient;
 import com.oracle.bmc.objectstorage.requests.GetNamespaceRequest;
 import com.oracle.bmc.objectstorage.responses.GetNamespaceResponse;
+import java.util.logging.Logger;
 
 /**
- * This example demonstrates how to use the
- * WorkloadIdentityFederationAuthenticationDetailProvider
- * to authenticate calls to OCI APIs. It uses the Object Storage client to get
- * the account's
- * namespace, which implicitly validates the authentication.
+ * This example demonstrates how to use the WorkloadIdentityFederationAuthenticationDetailProvider
+ * to authenticate calls to OCI APIs. It shows the basic usage and how to enable an optional
+ * circuit breaker for the federation client.
  *
  * <p>
  * This example requires the following command-line arguments:
  * <ol>
- * <li>tokenExchangeUrl: The URL of the token exchange endpoint (e.g., from an
- * Identity Domain).</li>
- * <li>clientCredential: The client credential for basic authentication (e.g.,
- * "client_id:client_secret").</li>
+ * <li>tokenExchangeUrl: The URL of the token exchange endpoint (e.g., from an Identity Domain).</li>
+ * <li>clientCredential: The client credential for basic authentication (e.g., "client_id:client_secret").</li>
  * <li>regionId: The OCI region ID (e.g., "us-ashburn-1").</li>
- * <li>compartmentId: The OCID of the compartment to query (e.g., your tenancy
- * OCID).</li>
+ * <li>compartmentId: The OCID of the compartment to query (e.g., your tenancy OCID).</li>
  * </ol>
- * It also requires the `OCI_SUBJECT_TOKEN` environment variable to be set with
- * the subject token.
+ * It also requires the `OCI_SUBJECT_TOKEN` environment variable to be set with the subject token.
  */
 public class WorkloadIdentityFederationAuthenticationExample {
 
+    private static final Logger logger = Logger.getLogger(WorkloadIdentityFederationAuthenticationExample.class.getName());
+
     public static void main(String[] args) throws Exception {
         if (args.length != 4) {
-            throw new IllegalArgumentException(
-                    "This example expects 4 arguments: <tokenExchangeUrl> <clientCredential> <regionId> <compartmentId>");
+            logger.severe("Usage: java WorkloadIdentityFederationAuthenticationExample " +
+                    "<tokenExchangeUrl> <clientCredential> <regionId> <compartmentId>");
+            System.exit(1);
         }
 
         final String tokenExchangeUrl = args[0];
-        // Pull subjectToken from environment variable
+        final String clientCredential = args[1];
+        final String regionId = args[2];
+        final String compartmentId = args[3];
+
+        // Pull subject token from environment variable
         final String subjectToken = System.getenv("OCI_SUBJECT_TOKEN");
         if (subjectToken == null || subjectToken.isEmpty()) {
             throw new IllegalArgumentException(
                     "Environment variable OCI_SUBJECT_TOKEN must be set with the subject token.");
         }
-        final String clientCredential = args[1];
-        final String regionId = args[2];
-        final String compartmentId = args[3];
 
-        System.out.println("--- Debug Information ---");
-        System.out.println("Token Exchange URL: " + tokenExchangeUrl);
-        System.out.println("Subject Token (first 10 chars): "
+        logger.info("=== Workload Identity Federation Authentication Example ===");
+        logger.info("Token Exchange URL: " + tokenExchangeUrl);
+        logger.info("Subject Token (first 10 chars): "
                 + subjectToken.substring(0, Math.min(subjectToken.length(), 10)) + "...");
-        System.out.println("Client Credential (first 10 chars): "
+        logger.info("Client Credential (first 10 chars): "
                 + clientCredential.substring(0, Math.min(clientCredential.length(), 10)) + "...");
-        System.out.println("Region ID: " + regionId);
-        System.out.println("Compartment ID: " + compartmentId);
-        System.out.println("-------------------------");
+        logger.info("Region ID: " + regionId);
+        logger.info("Compartment ID: " + compartmentId);
+        logger.info("");
 
-        // Configure AuthenticationDetailsProvider
-        System.out.println("Configuring AuthenticationDetailsProvider...");
+        // --- Create the authentication provider ---
+        // This is the basic configuration that relies on SDK defaults for HTTP client settings.
+        WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder =
+                WorkloadIdentityFederationAuthenticationDetailProvider.builder()
+                        .tokenExchangeUrl(tokenExchangeUrl)
+                        .subjectTokenSupplier(() -> subjectToken)
+                        .clientCredential(clientCredential)
+                        .region(Region.fromRegionId(regionId))
+                        .secondsToExpireSessionTokenEarly(300L); // Optional: 5 minutes early expiration
 
-        // Build the WorkloadIdentityFederationAuthenticationDetailProvider
-        System.out.println("Building WorkloadIdentityFederationAuthenticationDetailProvider...");
-        WorkloadIdentityFederationAuthenticationDetailProvider provider = new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder()
-                .tokenExchangeUrl(tokenExchangeUrl)
-                .clientCredential(clientCredential)
-                .region(Region.fromRegionId(regionId))
-                .subjectTokenSupplier(() -> { // example fetch the subject token dynamically using a lambda
-                    String token = System.getenv("OCI_SUBJECT_TOKEN");
-                    if (token == null || token.isEmpty()) {
-                        throw new IllegalStateException("Failed to fetch subject token");
-                    }
-                    return token;
-                })
-                .build();
-        System.out.println("WorkloadIdentityFederationAuthenticationDetailProvider built successfully.");
+        // --- Optional: Enable a circuit breaker ---
+        // For added resilience, you can enable a circuit breaker with default settings.
+        // This is useful if the token exchange endpoint is temporarily unavailable.
+        // To enable it, uncomment the following line:
+        // builder.withCircuitBreaker();
 
-        // Initialize Object Storage Client with the new provider
-        System.out.println("Initializing Object Storage Client...");
-        ObjectStorageClient osClient = ObjectStorageClient.builder()
-                .region(Region.fromRegionId(regionId))
-                .build(provider);
+        WorkloadIdentityFederationAuthenticationDetailProvider authProvider = builder.build();
 
-        try {
-            // Make a call to Object Storage to validate authentication
-            System.out.println(
-                    "Attempting to get Object Storage namespace using WorkloadIdentityFederationAuthenticationDetailProvider...");
-            GetNamespaceResponse namespaceResponse = osClient.getNamespace(
-                    GetNamespaceRequest.builder().compartmentId(compartmentId).build());
+        // Test the authentication by making an Object Storage API call
+        try (ObjectStorageClient objectStorageClient = ObjectStorageClient.builder()
+                .build(authProvider)) {
 
-            String namespaceName = namespaceResponse.getValue();
-            System.out.println("Successfully retrieved Object Storage namespace: " + namespaceName);
-            System.out
-                    .println("Authentication with WorkloadIdentityFederationAuthenticationDetailProvider successful!");
+            logger.info("Testing authentication with Object Storage API...");
+
+            // Get the namespace (this validates that authentication is working)
+            GetNamespaceResponse namespaceResponse = objectStorageClient.getNamespace(
+                    GetNamespaceRequest.builder().build());
+
+            String namespace = namespaceResponse.getValue();
+            logger.info("✓ Authentication successful!");
+            logger.info("Account namespace: " + namespace);
+
+            // Demonstrate token refresh capability
+            logger.info("");
+            logger.info("Testing token refresh...");
+            String refreshedToken = authProvider.refresh();
+            logger.info("✓ Token refresh successful!");
+            logger.info("Refreshed token (first 20 chars): " +
+                    refreshedToken.substring(0, Math.min(refreshedToken.length(), 20)) + "...");
 
         } catch (Exception e) {
-            System.err.println("Error during Object Storage namespace retrieval: " + e.getMessage());
+            logger.severe("✗ Authentication or API call failed: " + e.getMessage());
             e.printStackTrace();
-            throw e;
-        } finally {
-            osClient.close();
+            System.exit(1);
         }
+
+        logger.info("");
+        logger.info("=== Example completed successfully! ===");
     }
 }

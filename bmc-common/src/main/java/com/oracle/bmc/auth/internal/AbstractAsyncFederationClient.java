@@ -41,7 +41,7 @@ import java.util.Optional;
 public abstract class AbstractAsyncFederationClient
         implements AsyncFederationClient, ProvidesConfigurableRefreshAsync {
     private static final Logger LOG = org.slf4j.LoggerFactory.getLogger(AbstractAsyncFederationClient.class);
-    protected volatile SecurityTokenAdapter securityTokenAdapter;
+    protected volatile SecurityTokenAdapter securityTokenAdapter; // volatile to ensure immediate visibility across threads
     protected final SessionKeySupplier sessionKeySupplier;
     protected final OciCircuitBreaker circuitBreaker;
     protected final HttpClient federationClient;
@@ -93,13 +93,16 @@ public abstract class AbstractAsyncFederationClient
 
     protected CompletableFuture<String> refreshAndGetSecurityTokenInnerAsync(
             final boolean doFinalTokenValidityCheck, Optional<Duration> time, boolean refreshKeys) {
+        // double-check locking ...First check if the token is valid
         boolean isValid = securityTokenAdapter.isValid(time);
+
         if (doFinalTokenValidityCheck && isValid) {
             LOG.debug("Token is valid, returning existing token");
             return CompletableFuture.completedFuture(securityTokenAdapter.getSecurityToken());
         }
 
         synchronized (refreshLock) {
+            // double-check lcking  .. Check again after acquiring the lock
             if (pendingRefresh != null && !pendingRefresh.isCompletedExceptionally()) {
                 LOG.debug("Reusing existing pending refresh: {}", pendingRefresh);
                 return pendingRefresh.thenApply(SecurityTokenAdapter::getSecurityToken);
@@ -136,7 +139,7 @@ public abstract class AbstractAsyncFederationClient
 
     /**
      * Gets a security token from the federation endpoint. This will be a long-lived
-     * token that is used to authenticate requests to OCI services.
+     * token used to authenticate requests to OCI services.
      *
      * @return the security token
      */
