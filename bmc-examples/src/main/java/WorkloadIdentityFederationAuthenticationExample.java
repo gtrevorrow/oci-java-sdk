@@ -5,6 +5,7 @@
 
 import com.oracle.bmc.Region;
 import com.oracle.bmc.auth.WorkloadIdentityFederationAuthenticationDetailProvider;
+import com.oracle.bmc.objectstorage.ObjectStorageAsyncClient;
 import com.oracle.bmc.objectstorage.ObjectStorageClient;
 import com.oracle.bmc.objectstorage.requests.GetNamespaceRequest;
 import com.oracle.bmc.objectstorage.responses.GetNamespaceResponse;
