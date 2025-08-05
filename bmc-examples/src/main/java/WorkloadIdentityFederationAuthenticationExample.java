@@ -134,16 +134,17 @@ public class WorkloadIdentityFederationAuthenticationExample {
                         // At this point, asyncAuthProvider is guaranteed to have a valid authentication token
                         // This eliminates the "cold start" delay that would occur with regular build()
 
-                        // Create a new Object Storage client with the async-initialized provider
-                        try (ObjectStorageClient asyncClient = ObjectStorageClient.builder()
+                        // Create a new Object Storage ASYNC client with the async-initialized provider
+                        try (ObjectStorageAsyncClient asyncClient = ObjectStorageAsyncClient.builder()
                                 .build(asyncAuthProvider)) {
 
                             logger.info("Making Object Storage API call with async provider...");
 
                             // This API call happens immediately without any authentication delay
                             // because the token was pre-fetched during buildAsync()
+                            // ObjectStorageAsyncClient.getNamespace() returns CompletableFuture<GetNamespaceResponse>
                             GetNamespaceResponse response = asyncClient.getNamespace(
-                                    GetNamespaceRequest.builder().build());
+                                    GetNamespaceRequest.builder().build(), null).get();
                             String asyncNamespace = response.getValue();
                             logger.info("✓ Async provider authentication successful!");
                             logger.info("Account namespace (via async provider): " + asyncNamespace);
