@@ -428,4 +428,243 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                                         refreshFutures[i].get());
                 }
         }
+
+        @Test
+        public void buildAsyncPreFetchesTokenSuccessfully() throws Exception {
+                // Setup mock federation client to return a token
+                WorkloadIdentityFederationClient realFederationClient = mock(WorkloadIdentityFederationClient.class);
+                when(realFederationClient.getSecurityToken())
+                                .thenReturn(CompletableFuture.completedFuture(MOCK_SECURITY_TOKEN));
+
+                // Create a builder that returns our mock federation client
+                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder =
+                        new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
+                                @Override
+                                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
+                                        return realFederationClient;
+                                }
+                        };
+
+                // Test buildAsync() completes successfully
+                CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> asyncProviderFuture = builder
+                                .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
+                                .subjectTokenSupplier(mockSubjectTokenSupplier)
+                                .clientCredential(MOCK_CLIENT_CREDENTIAL)
+                                .region(MOCK_REGION)
+                                .buildAsync();
+
+                // Verify the future completes and returns a valid provider
+                WorkloadIdentityFederationAuthenticationDetailProvider asyncProvider = asyncProviderFuture.get(5, TimeUnit.SECONDS);
+                assertNotNull("Async provider should not be null", asyncProvider);
+                assertEquals("Region should match", MOCK_REGION, asyncProvider.getRegion());
+
+                // Verify that getSecurityToken was called during buildAsync (token pre-fetching)
+                verify(realFederationClient, times(1)).getSecurityToken();
+        }
+
+        @Test
+        public void buildAsyncHandlesTokenFetchFailure() throws Exception {
+                // Setup mock federation client to fail token fetch
+                WorkloadIdentityFederationClient realFederationClient = mock(WorkloadIdentityFederationClient.class);
+                CompletableFuture<String> failedTokenFuture = new CompletableFuture<>();
+                failedTokenFuture.completeExceptionally(new RuntimeException("Token fetch failed"));
+                when(realFederationClient.getSecurityToken()).thenReturn(failedTokenFuture);
+
+                // Create a builder that returns our mock federation client
+                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder =
+                        new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
+                                @Override
+                                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
+                                        return realFederationClient;
+                                }
+                        };
+
+                // Test buildAsync() fails appropriately
+                CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> asyncProviderFuture = builder
+                                .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
+                                .subjectTokenSupplier(mockSubjectTokenSupplier)
+                                .clientCredential(MOCK_CLIENT_CREDENTIAL)
+                                .region(MOCK_REGION)
+                                .buildAsync();
+
+                // Verify the future completes exceptionally
+                try {
+                        asyncProviderFuture.get(5, TimeUnit.SECONDS);
+                        fail("Expected CompletionException due to token fetch failure");
+                } catch (java.util.concurrent.ExecutionException e) {
+                        assertEquals("Token fetch failed", e.getCause().getMessage());
+                }
+
+                // Verify that getSecurityToken was attempted
+                verify(realFederationClient, times(1)).getSecurityToken();
+        }
+
+        @Test
+        public void buildAsyncVsSyncBehaviorComparison() throws Exception {
+                // This test demonstrates the key difference between build() and buildAsync()
+                // build() = provider created immediately, token fetched on first use
+                // buildAsync() = token fetched during provider creation, provider ready immediately
+
+                CountDownLatch tokenFetchStarted = new CountDownLatch(1);
+                CountDownLatch allowTokenFetchToComplete = new CountDownLatch(1);
+
+                // Create a mock federation client that allows us to control timing
+                WorkloadIdentityFederationClient controlledFederationClient = mock(WorkloadIdentityFederationClient.class);
+                when(controlledFederationClient.getSecurityToken()).thenAnswer(invocation -> {
+                        logger.info("Token fetch started");
+                        tokenFetchStarted.countDown();
+                        return CompletableFuture.supplyAsync(() -> {
+                                try {
+                                        allowTokenFetchToComplete.await(10, TimeUnit.SECONDS);
+                                        logger.info("Token fetch completed");
+                                        return MOCK_SECURITY_TOKEN;
+                                } catch (InterruptedException e) {
+                                        Thread.currentThread().interrupt();
+                                        throw new RuntimeException("Token fetch interrupted", e);
+                                }
+                        });
+                });
+
+                // Create a builder that returns our controlled federation client
+                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder =
+                        new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
+                                @Override
+                                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
+                                        return controlledFederationClient;
+                                }
+                        };
+
+                // Test buildAsync() - should trigger token fetch immediately
+                logger.info("Starting buildAsync() test");
+                CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> asyncFuture = builder
+                                .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
+                                .subjectTokenSupplier(mockSubjectTokenSupplier)
+                                .clientCredential(MOCK_CLIENT_CREDENTIAL)
+                                .region(MOCK_REGION)
+                                .buildAsync();
+
+                // Verify token fetch was started immediately by buildAsync()
+                boolean tokenFetchStartedByBuildAsync = tokenFetchStarted.await(5, TimeUnit.SECONDS);
+                assertEquals("buildAsync() should trigger immediate token fetch", true, tokenFetchStartedByBuildAsync);
+
+                // Allow token fetch to complete
+                allowTokenFetchToComplete.countDown();
+
+                // Verify buildAsync() completes successfully
+                WorkloadIdentityFederationAuthenticationDetailProvider asyncProvider = asyncFuture.get(5, TimeUnit.SECONDS);
+                assertNotNull("Async provider should be created successfully", asyncProvider);
+
+                // Verify getSecurityToken was called during buildAsync (pre-fetching behavior)
+                verify(controlledFederationClient, times(1)).getSecurityToken();
+
+                logger.info("buildAsync() test completed successfully");
+        }
+
+        @Test
+        public void buildAsyncWithMissingRequiredFieldsThrowsException() {
+                // Test that buildAsync() validates required fields just like build()
+
+                // Missing token exchange URL
+                assertThrows(IllegalArgumentException.class, () -> {
+                        WorkloadIdentityFederationAuthenticationDetailProvider.builder()
+                                        .subjectTokenSupplier(mockSubjectTokenSupplier)
+                                        .clientCredential(MOCK_CLIENT_CREDENTIAL)
+                                        .region(MOCK_REGION)
+                                        .buildAsync();
+                });
+
+                // Missing subject token supplier
+                assertThrows(IllegalArgumentException.class, () -> {
+                        WorkloadIdentityFederationAuthenticationDetailProvider.builder()
+                                        .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
+                                        .clientCredential(MOCK_CLIENT_CREDENTIAL)
+                                        .region(MOCK_REGION)
+                                        .buildAsync();
+                });
+
+                // Missing client credential
+                assertThrows(IllegalArgumentException.class, () -> {
+                        WorkloadIdentityFederationAuthenticationDetailProvider.builder()
+                                        .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
+                                        .subjectTokenSupplier(mockSubjectTokenSupplier)
+                                        .region(MOCK_REGION)
+                                        .buildAsync();
+                });
+
+                // Missing region
+                assertThrows(IllegalArgumentException.class, () -> {
+                        WorkloadIdentityFederationAuthenticationDetailProvider.builder()
+                                        .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
+                                        .subjectTokenSupplier(mockSubjectTokenSupplier)
+                                        .clientCredential(MOCK_CLIENT_CREDENTIAL)
+                                        .buildAsync();
+                });
+        }
+
+        @Test
+        public void buildAsyncReturnsProviderWithSameConfigurationAsBuild() throws Exception {
+                // Verify that buildAsync() creates a provider with identical configuration to build()
+                setupMockKeyPair();
+
+                // Mock the federation client for BOTH sync and async tests to avoid real HTTP calls
+                WorkloadIdentityFederationClient mockSyncFederationClient = mock(WorkloadIdentityFederationClient.class);
+                when(mockSyncFederationClient.getSecurityToken())
+                                .thenReturn(CompletableFuture.completedFuture(MOCK_SECURITY_TOKEN));
+
+                WorkloadIdentityFederationClient mockAsyncFederationClient = mock(WorkloadIdentityFederationClient.class);
+                when(mockAsyncFederationClient.getSecurityToken())
+                                .thenReturn(CompletableFuture.completedFuture(MOCK_SECURITY_TOKEN));
+
+                // Create a builder for sync provider that returns our mock federation client
+                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder syncBuilder =
+                        new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
+                                @Override
+                                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
+                                        return mockSyncFederationClient;
+                                }
+                        };
+
+                // Create sync provider with mocked federation client
+                WorkloadIdentityFederationAuthenticationDetailProvider syncProvider = syncBuilder
+                                .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
+                                .subjectTokenSupplier(mockSubjectTokenSupplier)
+                                .clientCredential(MOCK_CLIENT_CREDENTIAL)
+                                .region(MOCK_REGION)
+                                .secondsToExpireSessionTokenEarly(300L)
+                                .build();
+
+                // Create a builder for async provider that returns our mock federation client
+                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder asyncBuilder =
+                        new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
+                                @Override
+                                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
+                                        return mockAsyncFederationClient;
+                                }
+                        };
+
+                WorkloadIdentityFederationAuthenticationDetailProvider asyncProvider = asyncBuilder
+                                .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
+                                .subjectTokenSupplier(mockSubjectTokenSupplier)
+                                .clientCredential(MOCK_CLIENT_CREDENTIAL)
+                                .region(MOCK_REGION)
+                                .secondsToExpireSessionTokenEarly(300L)
+                                .buildAsync()
+                                .get(5, TimeUnit.SECONDS);
+
+                // Verify both providers have the same configuration
+                assertEquals("Both providers should have the same region",
+                        syncProvider.getRegion(), asyncProvider.getRegion());
+                assertNotNull("Both providers should have non-null key IDs", syncProvider.getKeyId());
+                assertNotNull("Both providers should have non-null key IDs", asyncProvider.getKeyId());
+                assertNotNull("Both providers should have private keys", syncProvider.getPrivateKey());
+                assertNotNull("Both providers should have private keys", asyncProvider.getPrivateKey());
+
+                // Verify the async provider had its token pre-fetched during buildAsync()
+                // AND called again during getKeyId() - so expect 2 calls total
+                verify(mockAsyncFederationClient, times(2)).getSecurityToken();
+
+                // Verify the sync provider only fetched tokens when needed (during getKeyId() call)
+                verify(mockSyncFederationClient, times(1)).getSecurityToken(); // Called only by getKeyId()
+        }
 }
+

@@ -70,6 +70,19 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
     }
 
 
+    /**
+     * Overrides the base implementation to provide proactive token refresh behavior.
+     * <p>
+     * Unlike the base class which only refreshes tokens when they are already invalid,
+     * this implementation refreshes tokens early (before expiration) to prevent
+     * authentication failures in workload identity scenarios where timing is critical.
+     * <p>
+     * The early refresh is controlled by secondsToExpireSessionTokenEarly (default 5 minutes),
+     * ensuring tokens are renewed well before they expire to avoid any risk of using
+     * an expired token during authentication.
+     *
+     * @return CompletableFuture containing the security token
+     */
     @Override
     public CompletableFuture<String> getSecurityToken() {
         return refreshAndGetSecurityTokenIfExpiringWithin(

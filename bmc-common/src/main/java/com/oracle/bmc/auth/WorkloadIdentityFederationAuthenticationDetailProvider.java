@@ -7,17 +7,18 @@ package com.oracle.bmc.auth;
 import java.io.InputStream;
 import java.security.interfaces.RSAPrivateKey;
 import java.time.Duration;
+import java.util.Base64;
+import java.util.Collections;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
+
+import java.io.ByteArrayInputStream;
 
 import com.oracle.bmc.Region;
 import com.oracle.bmc.auth.internal.AuthUtils;
 import com.oracle.bmc.auth.internal.AsyncFederationClient;
 import com.oracle.bmc.auth.internal.WorkloadIdentityFederationClient;
 import com.oracle.bmc.circuitbreaker.CircuitBreakerConfiguration;
-
-import java.io.ByteArrayInputStream;
-import java.util.Base64;
-import java.util.Collections;
 
 import org.slf4j.Logger;
 
@@ -253,6 +254,53 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
                     this.tokenExchangeUrl,
                     region);
         }
+
+        /**
+         * Builds the {@link WorkloadIdentityFederationAuthenticationDetailProvider} asynchronously.
+         * This method initializes the federation client and pre-fetches the first token,
+         * then returns a CompletableFuture that completes with the fully initialized provider.
+         *
+         * This is useful when you want to ensure the provider is ready with a valid token
+         * before passing it to a client that needs authentication.
+         *
+         * @throws IllegalArgumentException if any required field is not set.
+         * @return a CompletableFuture containing the initialized authentication provider
+         */
+        public CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> buildAsync() {
+            if (tokenExchangeUrl == null || tokenExchangeUrl.trim().isEmpty()) {
+                throw new IllegalArgumentException("Token exchange URL must not be null or empty");
+            }
+            if (subjectTokenSupplier == null) {
+                throw new IllegalArgumentException("Subject token supplier must not be null");
+            }
+            if (clientCredential == null || clientCredential.trim().isEmpty()) {
+                throw new IllegalArgumentException("Client credential must not be null or empty");
+            }
+            if (region == null) {
+                throw new IllegalArgumentException("Region must not be null");
+            }
+
+            SessionKeySupplier sessionKeySupplierToUse = sessionKeySupplier != null ? sessionKeySupplier
+                    : new SessionKeySupplierImpl();
+            this.sessionKeySupplier = new CachingSessionKeySupplier(sessionKeySupplierToUse);
+            this.federationClient = createFederationClient(sessionKeySupplierToUse);
+
+            WorkloadIdentityFederationAuthenticationDetailProvider provider =
+                new WorkloadIdentityFederationAuthenticationDetailProvider(this.federationClient,
+                        this.sessionKeySupplier,
+                        this.tokenExchangeUrl,
+                        region);
+
+            // Pre-fetch the first token to ensure the provider is ready
+            return provider.federationClient.getSecurityToken()
+                .thenApply(token -> {
+                    LOG.debug("Authentication provider initialized with token: {}",
+                        token != null ? "***" : "null");
+                    return provider;
+                });
+        }
+
+        // ...existing code...
     }
 
     @Override
