@@ -6,6 +6,9 @@ package com.oracle.bmc.auth.internal;
 
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * Interface for asynchronous federation clients that handle security token retrieval and management.
+ */
 public interface AsyncFederationClient {
 
     /**

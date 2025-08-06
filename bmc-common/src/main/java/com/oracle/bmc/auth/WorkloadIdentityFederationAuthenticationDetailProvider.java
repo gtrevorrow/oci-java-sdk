@@ -1,7 +1,5 @@
-/**
- * Copyright (c) 2016, 2025, Oracle and/or its affiliates.  All rights reserved.
- * This software is dual-licensed to you under the Universal Permissive License (UPL) 1.0 as shown at https://oss.oracle.com/licenses/upl or Apache License 2.0 as shown at http://www.apache.org/licenses/LICENSE-2.0. You may choose either license.
- */
+/// Copyright (c) 2016, 2025, Oracle and/or its affiliates.  All rights reserved.
+/// This software is dual-licensed to you under the Universal Permissive License (UPL) 1.0 as shown at https://oss.oracle.com/licenses/upl or Apache License 2.0 as shown at http://www.apache.org/licenses/LICENSE-2.0. You may choose either license.
 package com.oracle.bmc.auth;
 
 import java.io.InputStream;
@@ -11,7 +9,6 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
-
 import java.io.ByteArrayInputStream;
 
 import com.oracle.bmc.Region;
@@ -21,11 +18,42 @@ import com.oracle.bmc.auth.internal.WorkloadIdentityFederationClient;
 import com.oracle.bmc.circuitbreaker.CircuitBreakerConfiguration;
 
 import org.slf4j.Logger;
-
+/**
+ * An {@link BasicAuthenticationDetailsProvider} implementation that uses workload identity federation
+ * to authenticate with Oracle Cloud Infrastructure. This provider exchanges a subject token
+ * (e.g., a Kubernetes service account token) for an OCI session token, which is then used to
+ * sign API requests.
+ *
+ * <p>
+ * This provider offers two key features for robust authentication in long-running applications:
+ * <ol>
+ * <li><b>Asynchronous Initialization with {@code buildAsync()}:</b><br>
+ *    The {@link #builder()} provides a {@code buildAsync()} method that pre-fetches the first
+ *    authentication token upon initialization. This "fail-fast" approach ensures that
+ *    authentication issues are discovered at startup rather than during the first API call,
+ *    and it eliminates the initial authentication delay.</li>
+ *
+ * <li><b>Automatic Proactive Token Refresh with {@code retryConfiguration()}:</b><br>
+ *    For applications that make continuous API calls, this provider offers automatic proactive
+ *    token refresh when retry configuration is provided via {@link WorkloadIdentityFederationAuthenticationDetailProviderBuilder#retryConfiguration(RetryConfiguration)}.
+ *    When retry configuration is set, the provider uses a background thread to automatically refresh the session token before it
+ *    expires, preventing the calling thread from being blocked by token refresh operations and
+ *    ensuring consistent API call performance. When no retry configuration is provided, proactive refresh
+ *    is disabled to conserve resources.</li>
+ * </ol>
+ *
+ * <p>
+ * When proactive refresh is enabled (via retry configuration), it is crucial to call {@link #shutdown()} when the provider
+ * is no longer needed to release the background scheduling thread.
+ *
+ * @see WorkloadIdentityFederationAuthenticationDetailProviderBuilder
+ */
 @AuthCachingPolicy(cacheKeyId = false, cachePrivateKey = false)
 public class WorkloadIdentityFederationAuthenticationDetailProvider
         implements BasicAuthenticationDetailsProvider, RegionProvider, RefreshableOnNotAuthenticatedProvider<String>,
         ProvidesConfigurableRefresh {
+
+    private static final Logger LOG = org.slf4j.LoggerFactory.getLogger(WorkloadIdentityFederationAuthenticationDetailProvider.class);
 
     private final AsyncFederationClient federationClient;
     private final SessionKeySupplier sessionKeySupplier;
@@ -73,6 +101,7 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
      * <ul>
      * <li>{@link #secondsToExpireSessionTokenEarly(Long)}</li>
      * <li>{@link #withCircuitBreaker()}</li>
+     * <li>{@link #retryConfiguration(RetryConfiguration)}</li>
      * </ul>
      */
     public static class WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
@@ -85,6 +114,8 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
         private String clientCredential;
         private Long secondsToExpireSessionTokenEarly; // Default to 5 minutes early expiration
         private boolean withCircuitBreaker = false;
+        private RetryConfiguration retryConfiguration = null;
+
 
         private static final Logger LOG = org.slf4j.LoggerFactory
                 .getLogger(WorkloadIdentityFederationAuthenticationDetailProviderBuilder.class);
@@ -106,6 +137,12 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
                     circuitBreakerConfig = CircuitBreakerConfiguration.builder().build();
                 }
 
+                // Proactive refresh is automatically enabled when retry configuration is provided
+                boolean enableProactiveRefresh = retryConfiguration != null;
+                boolean enableRetry = retryConfiguration != null && retryConfiguration.isEnableRetryOnFailure();
+                int maxAttempts = retryConfiguration != null ? retryConfiguration.getMaxRetryAttempts() : 0;
+                long delaySeconds = retryConfiguration != null ? retryConfiguration.getRetryDelaySeconds() : 30;
+
                 this.federationClient = new WorkloadIdentityFederationClient(
                         tokenExchangeUrl,
                         subjectTokenSupplier,
@@ -114,10 +151,15 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
                         null, // No custom client configurator
                         circuitBreakerConfig,
                         Collections.emptyList(), // No additional client configurators
-                        secondsToExpireSessionTokenEarly);
+                        secondsToExpireSessionTokenEarly,
+                        enableProactiveRefresh, // Automatically enabled when retry config is provided
+                        enableRetry,   // Pass retry configuration (false if no config provided)
+                        maxAttempts,
+                        delaySeconds);
                 LOG.debug(
-                        "WorkloadIdentityFederationClient created with early expiration: {} seconds",
-                        this.secondsToExpireSessionTokenEarly);
+                        "WorkloadIdentityFederationClient created with early expiration: {} seconds, proactive refresh: {}, retry config: {}",
+                        this.secondsToExpireSessionTokenEarly, enableProactiveRefresh,
+                        retryConfiguration != null ? retryConfiguration : "none (proactive refresh disabled)");
             }
             return this.federationClient;
         }
@@ -223,6 +265,43 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
         }
 
         /**
+         * Sets the retry configuration for proactive refresh failures.
+         * <p>
+         * This method replaces the previous individual retry configuration methods
+         * ({@code enableRetryOnFailure()}, {@code maxRetryAttempts()}, {@code retryDelaySeconds()})
+         * with a single configuration object approach.
+         * </p>
+         * <p>
+         * <b>Usage Examples:</b>
+         * <pre>{@code
+         * // Disable retries (default)
+         * .retryConfiguration(RetryConfiguration.disabled())
+         *
+         * // Enable basic retries (3 attempts, 30s delay)
+         * .retryConfiguration(RetryConfiguration.basic())
+         *
+         * // Conservative retries (3 attempts, 60s delay)
+         * .retryConfiguration(RetryConfiguration.conservative())
+         *
+         * // Aggressive retries (5 attempts, 30s delay)
+         * .retryConfiguration(RetryConfiguration.aggressive())
+         *
+         * // Custom configuration
+         * .retryConfiguration(RetryConfiguration.custom(10, 120))
+         * }</pre>
+         *
+         * @param retryConfiguration the retry configuration to use
+         * @return this builder
+         */
+        public WorkloadIdentityFederationAuthenticationDetailProviderBuilder retryConfiguration(RetryConfiguration retryConfiguration) {
+            if (retryConfiguration == null) {
+                throw new IllegalArgumentException("Retry configuration must not be null");
+            }
+            this.retryConfiguration = retryConfiguration;
+            return this;
+        }
+
+        /**
          * Builds the {@link WorkloadIdentityFederationAuthenticationDetailProvider}.
          * All required fields must be set before calling this method.
          *
@@ -300,7 +379,7 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
                 });
         }
 
-        // ...existing code...
+
     }
 
     @Override
@@ -360,5 +439,17 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
     @Override
     public char[] getPassphraseCharacters() {
         return null; // Not applicable for token exchange
+    }
+
+    /**
+     * Shuts down the authentication provider and releases resources.
+     * This method delegates to the federation client's shutdown method to ensure
+     * proper cleanup of the proactive refresh scheduler.
+     */
+    public void shutdown() {
+        if (federationClient instanceof WorkloadIdentityFederationClient) {
+            ((WorkloadIdentityFederationClient) federationClient).shutdown();
+            LOG.debug("Authentication provider shut down");
+        }
     }
 }

@@ -32,6 +32,22 @@ import java.util.Optional;
  * </p>
  *
  * <p>
+ * <b>Async Implementation Note</b><br>
+ * This implementation provides true asynchronous behavior through CompletableFuture-based APIs.
+ * The underlying HTTP operations are handled by the OCI SDK's HttpClient abstraction, which ensures
+ * consistent non-blocking semantics regardless of the specific HTTP client implementation in use.
+ * This design enables:
+ * <ul>
+ * <li>Non-blocking token retrieval and refresh operations</li>
+ * <li>Proper CompletableFuture composition and chaining</li>
+ * <li>Concurrent token operations without thread blocking</li>
+ * <li>Consistent async behavior across different HTTP client implementations</li>
+ * </ul>
+ * Features like buildAsync() in authentication providers rely on this async foundation to provide
+ * token pre-fetching and fail-fast authentication initialization.
+ * </p>
+ *
+ * <p>
  * Subclasses must implement {@link #getSecurityTokenFromServer()} to define how security tokens are fetched from the server.
  * </p>
  *
@@ -103,7 +119,7 @@ public abstract class AbstractAsyncFederationClient
         }
 
         synchronized (refreshLock) {
-            // double-check lcking  .. Check again after acquiring the lock
+            // double-check locking  .. Check again after acquiring the lock
             if (pendingRefresh != null && !pendingRefresh.isCompletedExceptionally()) {
                 LOG.debug("Reusing existing pending refresh: {}", pendingRefresh);
                 return pendingRefresh.thenApply(SecurityTokenAdapter::getSecurityToken);
@@ -119,6 +135,8 @@ public abstract class AbstractAsyncFederationClient
                             adapter -> {
                                 LOG.debug("Refresh completed, updating token adapter");
                                 securityTokenAdapter = adapter;
+                                // Hook for subclasses to perform post-refresh actions
+                                onTokenRefreshCompleted(adapter.getTokenValidDuration());
                                 return adapter.getSecurityToken();
                             })
                     .whenComplete(
@@ -128,6 +146,12 @@ public abstract class AbstractAsyncFederationClient
                             });
         }
     }
+
+    /**
+     * Hook method called after a successful token refresh.
+     * Subclasses can override this to perform additional actions like scheduling proactive refreshes.
+     */
+    protected abstract void onTokenRefreshCompleted(Duration tokenValidDuration);
 
     public CompletableFuture<String> refreshAndGetSecurityToken() {
         return refreshAndGetSecurityTokenInnerAsync(true, null, true);

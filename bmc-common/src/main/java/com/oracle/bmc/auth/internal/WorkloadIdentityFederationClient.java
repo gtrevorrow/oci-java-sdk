@@ -17,14 +17,33 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 public class WorkloadIdentityFederationClient extends AbstractAsyncFederationClient {
     private static final Logger LOG = org.slf4j.LoggerFactory.getLogger(WorkloadIdentityFederationClient.class);
+
+    // Proactive refresh configuration
+    private static final long MIN_REFRESH_DELAY_SECONDS = 60; // Minimum 1 minute delay
+
     private final Supplier<String> subjectTokenSupplier;
     private final String clientCredentials;
     private final Long secondsToExpireSessionTokenEarly;
+
+    // Proactive refresh components
+    private final ScheduledExecutorService proactiveRefreshScheduler;
+    private volatile ScheduledFuture<?> scheduledRefreshTask;
+
+    // Retry configuration - configurable via setters
+    private volatile boolean enableRetryOnFailure = false; // Default: no retries
+    private volatile int maxRetryAttempts = 3; // Default: 3 attempts if enabled
+    private volatile long retryDelaySeconds = 30; // Default: 30 seconds between retries
+    private volatile int currentRetryCount = 0; // Track current retry attempts
 
     public WorkloadIdentityFederationClient(
             String tokenExchangeEndpoint,
@@ -34,7 +53,36 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
             ClientConfigurator clientConfigurator,
             CircuitBreakerConfiguration circuitBreakerConfiguration,
             List<ClientConfigurator> additionalClientConfigurators,
-            Long secondsToExpireSessionTokenEarly) {
+            Long secondsToExpireSessionTokenEarly,
+            boolean enableProactiveRefresh) {
+        this(
+                tokenExchangeEndpoint,
+                subjectTokenSupplier,
+                sessionKeySupplier,
+                clientCredentials,
+                clientConfigurator,
+                circuitBreakerConfiguration,
+                additionalClientConfigurators,
+                secondsToExpireSessionTokenEarly,
+                enableProactiveRefresh,
+                false, // enableRetryOnFailure
+                3,     // maxRetryAttempts
+                30L);  // retryDelaySeconds
+    }
+
+    public WorkloadIdentityFederationClient(
+            String tokenExchangeEndpoint,
+            Supplier<String> subjectTokenSupplier,
+            SessionKeySupplier sessionKeySupplier,
+            String clientCredentials,
+            ClientConfigurator clientConfigurator,
+            CircuitBreakerConfiguration circuitBreakerConfiguration,
+            List<ClientConfigurator> additionalClientConfigurators,
+            Long secondsToExpireSessionTokenEarly,
+            boolean enableProactiveRefresh,
+            boolean enableRetryOnFailure,
+            int maxRetryAttempts,
+            long retryDelaySeconds) {
         super(
                 sessionKeySupplier,
                 tokenExchangeEndpoint,
@@ -46,12 +94,30 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
         this.secondsToExpireSessionTokenEarly = secondsToExpireSessionTokenEarly != null
                 ? secondsToExpireSessionTokenEarly
                 : 300L;
+
+        // Set retry configuration from constructor parameters
+        this.enableRetryOnFailure = enableRetryOnFailure;
+        this.maxRetryAttempts = maxRetryAttempts;
+        this.retryDelaySeconds = retryDelaySeconds;
+        this.currentRetryCount = 0;
+
+        // Only initialize proactive refresh scheduler if explicitly enabled
+        if (enableProactiveRefresh) {
+            this.proactiveRefreshScheduler = new ScheduledThreadPoolExecutor(1, r -> {
+                Thread t = new Thread(r, "WorkloadIdentityFederationClient-ProactiveRefresh");
+                t.setDaemon(true);
+                return t;
+            });
+            LOG.debug("Proactive refresh enabled - scheduler initialized");
+        } else {
+            this.proactiveRefreshScheduler = null;
+            LOG.debug("Proactive refresh disabled - no scheduler created");
+        }
+
         LOG.debug(
-                "TokenExchangeFederationClient initialized with endpoint: {}",
-                tokenExchangeEndpoint);
+                "WorkloadIdentityFederationClient initialized with endpoint: {}, retry enabled: {}, max attempts: {}, delay: {}s",
+                tokenExchangeEndpoint, enableRetryOnFailure, maxRetryAttempts, retryDelaySeconds);
     }
-
-
 
     public WorkloadIdentityFederationClient(
             String tokenExchangeEndpoint,
@@ -66,7 +132,8 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
                 null,
                 null,
                 Collections.emptyList(),
-                null);
+                null,
+                false);
     }
 
 
@@ -217,5 +284,195 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
     @Override
     public String getStringClaim(String key) {
         return securityTokenAdapter.getStringClaim(key);
+    }
+
+    @Override
+    protected void onTokenRefreshCompleted(Duration tokenValidDuration) {
+        LOG.debug("Token refresh completed, token valid for: {}", tokenValidDuration);
+        // Only schedule proactive refresh if scheduler is enabled
+        if (proactiveRefreshScheduler != null) {
+            LOG.debug("Token refresh completed, scheduling proactive refresh");
+            scheduleProactiveTokenRefresh();
+        } else {
+            LOG.debug("Token refresh completed, proactive refresh disabled");
+        }
+    }
+
+    /**
+     * Calculates when the next proactive token refresh should occur.
+     * Returns the number of seconds from now when a proactive refresh should be scheduled,
+     * typically at 80% of the token's remaining lifetime.
+     *
+     * @return Optional containing seconds until proactive refresh, or empty if no valid token or scheduling not possible
+     */
+    private Optional<Long> calculateSecondsUntilProactiveRefresh() {
+        // Check if we have a valid token
+        if (!securityTokenAdapter.isValid()) {
+            // Token is invalid/expired, should refresh immediately
+            return Optional.of(0L);
+        }
+
+        Duration tokenValidDuration = securityTokenAdapter.getTokenValidDuration();
+        if (tokenValidDuration == null) {
+            return Optional.empty();
+        }
+
+        // For proactive refresh, we'll use a simple heuristic:
+        // Schedule refresh at 80% of the total token lifetime from now
+        // This is a reasonable default that works well for most token lifetimes
+        long totalLifetimeSeconds = tokenValidDuration.getSeconds();
+        long refreshDelaySeconds = Math.max((long) (totalLifetimeSeconds * 0.8), 60);
+
+        // Cap the delay to a reasonable maximum (e.g., 1 hour) to handle very long-lived tokens
+        refreshDelaySeconds = Math.min(refreshDelaySeconds, 3600);
+
+        return Optional.of(refreshDelaySeconds);
+    }
+
+    /**
+     * Schedules a proactive token refresh based on the current token's expiration time.
+     * This method cancels any previously scheduled refresh and schedules a new one
+     * using the federation client's calculation of when to refresh proactively.
+     */
+    private void scheduleProactiveTokenRefresh() {
+        // Only schedule if proactive refresh is enabled
+        if (proactiveRefreshScheduler == null) {
+            LOG.debug("Proactive refresh disabled, skipping scheduling");
+            return;
+        }
+
+        try {
+            // Cancel any existing scheduled refresh
+            if (scheduledRefreshTask != null && !scheduledRefreshTask.isDone()) {
+                scheduledRefreshTask.cancel(false);
+                LOG.debug("Cancelled previous proactive refresh task");
+            }
+
+            // Get the recommended delay from the federation client
+            Optional<Long> secondsUntilRefresh = calculateSecondsUntilProactiveRefresh();
+            if (!secondsUntilRefresh.isPresent()) {
+                LOG.warn("Cannot schedule proactive refresh: could not determine refresh timing");
+                return;
+            }
+
+            long refreshDelaySeconds = secondsUntilRefresh.get();
+
+            if (refreshDelaySeconds <= 0) {
+                LOG.warn("Token is already expired, scheduling immediate refresh");
+                scheduleImmediateRefresh();
+                return;
+            }
+
+            LOG.debug("Scheduling proactive token refresh in {} seconds", refreshDelaySeconds);
+
+            // Schedule the proactive refresh
+            scheduledRefreshTask = proactiveRefreshScheduler.schedule(
+                    this::performProactiveRefresh,
+                    refreshDelaySeconds,
+                    TimeUnit.SECONDS);
+
+        } catch (Exception e) {
+            LOG.warn("Failed to schedule proactive token refresh", e);
+        }
+    }
+
+    /**
+     * Performs the actual proactive token refresh in the background.
+     * This method is called by the scheduled executor service.
+     */
+    private void performProactiveRefresh() {
+        try {
+            LOG.debug("Performing proactive token refresh");
+            refreshAndGetSecurityTokenInnerAsync(true, null, true)
+                    .thenRun(() -> {
+                        LOG.debug("Proactive token refresh completed successfully");
+                        currentRetryCount = 0; // Reset retry counter on success
+                        // onTokenRefreshCompleted will be called automatically and schedule the next refresh
+                    })
+                    .exceptionally(throwable -> {
+                        LOG.warn("Proactive token refresh failed, will retry with exponential backoff", throwable);
+                        scheduleRetryRefresh();
+                        return null;
+                    });
+        } catch (Exception e) {
+            LOG.warn("Failed to initiate proactive token refresh", e);
+            scheduleRetryRefresh();
+        }
+    }
+
+    /**
+     * Schedules an immediate refresh when the token is already expired.
+     */
+    private void scheduleImmediateRefresh() {
+        if (proactiveRefreshScheduler != null) {
+            scheduledRefreshTask = proactiveRefreshScheduler.schedule(
+                    this::performProactiveRefresh,
+                    0,
+                    TimeUnit.SECONDS);
+        }
+    }
+
+    /**
+     * Schedules a retry refresh with a short delay when proactive refresh fails.
+     * Only retries if enableRetryOnFailure is true and within maxRetryAttempts limit.
+     */
+    private void scheduleRetryRefresh() {
+        // Check if retries are enabled
+        if (!enableRetryOnFailure) {
+            LOG.warn("Proactive token refresh failed, but retries are disabled. Skipping retry.");
+            currentRetryCount = 0; // Reset for future refresh cycles
+            return;
+        }
+
+        // Check if we've exceeded max retry attempts
+        if (currentRetryCount >= maxRetryAttempts) {
+            LOG.warn("Proactive token refresh failed and max retry attempts ({}) exceeded. Stopping retries.", maxRetryAttempts);
+            currentRetryCount = 0; // Reset for future refresh cycles
+            return;
+        }
+
+        if (proactiveRefreshScheduler != null) {
+            long retryDelay = retryDelaySeconds;
+
+            // Exponential backoff: double the delay for each retry attempt
+            for (int i = 0; i < currentRetryCount; i++) {
+                retryDelay = Math.min(retryDelay * 2, 3600); // Cap at 1 hour
+            }
+
+            LOG.info("Scheduling retry refresh in {} seconds (attempt {}/{})",
+                retryDelay, currentRetryCount + 1, maxRetryAttempts);
+
+            scheduledRefreshTask = proactiveRefreshScheduler.schedule(
+                    this::performProactiveRefresh,
+                    retryDelay,
+                    TimeUnit.SECONDS);
+
+            // Increment the retry count for next failure
+            currentRetryCount++;
+        }
+    }
+
+    /**
+     * Shuts down the proactive refresh scheduler.
+     * This method should be called when the client is no longer needed to clean up resources.
+     */
+    public void shutdown() {
+        if (scheduledRefreshTask != null && !scheduledRefreshTask.isDone()) {
+            scheduledRefreshTask.cancel(false);
+        }
+        if (proactiveRefreshScheduler != null) {
+            proactiveRefreshScheduler.shutdown();
+            try {
+                if (!proactiveRefreshScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                    proactiveRefreshScheduler.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                proactiveRefreshScheduler.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            LOG.debug("Proactive refresh scheduler shut down");
+        } else {
+            LOG.debug("No proactive refresh scheduler to shut down");
+        }
     }
 }
