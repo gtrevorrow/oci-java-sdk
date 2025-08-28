@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import java.security.KeyPair;
 import java.security.interfaces.RSAPublicKey;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +24,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 public class WorkloadIdentityFederationClient extends AbstractAsyncFederationClient {
@@ -40,10 +42,10 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
     private volatile ScheduledFuture<?> scheduledRefreshTask;
 
     // Retry configuration - configurable via setters
-    private volatile boolean enableRetryOnFailure = false; // Default: no retries
-    private volatile int maxRetryAttempts = 3; // Default: 3 attempts if enabled
-    private volatile long retryDelaySeconds = 30; // Default: 30 seconds between retries
-    private volatile int currentRetryCount = 0; // Track current retry attempts
+    private volatile boolean enableRetryOnFailure; // Default: no retries
+    private volatile int maxRetryAttempts; // Default: 3 attempts if enabled
+    private volatile long retryDelaySeconds; // Default: 30 seconds between retries
+    private final AtomicInteger currentRetryCount = new AtomicInteger(); // Track current retry attempts
 
     public WorkloadIdentityFederationClient(
             String tokenExchangeEndpoint,
@@ -99,7 +101,7 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
         this.enableRetryOnFailure = enableRetryOnFailure;
         this.maxRetryAttempts = maxRetryAttempts;
         this.retryDelaySeconds = retryDelaySeconds;
-        this.currentRetryCount = 0;
+        this.currentRetryCount.set(0);
 
         // Only initialize proactive refresh scheduler if explicitly enabled
         if (enableProactiveRefresh) {
@@ -187,7 +189,11 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
             }
 
             String basicAuth = clientCredentials;
-            LOG.debug("Basic Auth Header (encoded): {}", basicAuth);
+            // Avoid logging full credentials; mask for safety
+            if (LOG.isDebugEnabled()) {
+                String masked = basicAuth == null ? "null" : (basicAuth.length() <= 8 ? "********" : basicAuth.substring(0, 4) + "****" + basicAuth.substring(basicAuth.length() - 4));
+                LOG.debug("Basic Auth Header (encoded, masked): {}", masked);
+            }
 
             StringBuilder requestBodyBuilder = new StringBuilder();
             requestBodyBuilder
@@ -230,6 +236,7 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
                                                                 "Token exchange request failed with status: {} and body: {}",
                                                                 response.status(),
                                                                 body);
+                                                        response.close();
                                                         CompletableFuture<SecurityTokenAdapter> failed = new CompletableFuture<>();
                                                         failed.completeExceptionally(
                                                                 new RuntimeException(
@@ -265,7 +272,8 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
                                                                 "Failed to parse token exchange response",
                                                                 e);
                                                     }
-                                                });
+                                                })
+                                        .whenComplete((r, t) -> response.close());
                             });
         } catch (Exception e) {
             LOG.error("Unable to exchange token", e);
@@ -309,22 +317,26 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
         // Check if we have a valid token
         if (!securityTokenAdapter.isValid()) {
             // Token is invalid/expired, should refresh immediately
+            LOG.info("Proactive refresh: token invalid/expired; scheduling immediate refresh");
             return Optional.of(0L);
         }
 
         Duration tokenValidDuration = securityTokenAdapter.getTokenValidDuration();
         if (tokenValidDuration == null) {
+            LOG.warn("Proactive refresh: token valid duration unknown; cannot schedule proactively");
             return Optional.empty();
         }
 
-        // For proactive refresh, we'll use a simple heuristic:
-        // Schedule refresh at 80% of the total token lifetime from now
-        // This is a reasonable default that works well for most token lifetimes
         long totalLifetimeSeconds = tokenValidDuration.getSeconds();
-        long refreshDelaySeconds = Math.max((long) (totalLifetimeSeconds * 0.8), 60);
+        long refreshDelaySeconds = Math.max((long) (totalLifetimeSeconds * 0.8), MIN_REFRESH_DELAY_SECONDS);
 
         // Cap the delay to a reasonable maximum (e.g., 1 hour) to handle very long-lived tokens
         refreshDelaySeconds = Math.min(refreshDelaySeconds, 3600);
+
+        LOG.info(
+                "Proactive refresh: token valid for ~{}s; targeting refresh in {}s (~80% of lifetime)",
+                totalLifetimeSeconds,
+                refreshDelaySeconds);
 
         return Optional.of(refreshDelaySeconds);
     }
@@ -358,12 +370,13 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
             long refreshDelaySeconds = secondsUntilRefresh.get();
 
             if (refreshDelaySeconds <= 0) {
-                LOG.warn("Token is already expired, scheduling immediate refresh");
+                LOG.warn("Proactive refresh: scheduling immediate refresh (delay={}s)", refreshDelaySeconds);
                 scheduleImmediateRefresh();
                 return;
             }
 
-            LOG.debug("Scheduling proactive token refresh in {} seconds", refreshDelaySeconds);
+            Instant scheduledAt = Instant.now().plusSeconds(refreshDelaySeconds);
+            LOG.info("Proactive refresh: scheduling background refresh in {}s at {}", refreshDelaySeconds, scheduledAt);
 
             // Schedule the proactive refresh
             scheduledRefreshTask = proactiveRefreshScheduler.schedule(
@@ -382,20 +395,21 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
      */
     private void performProactiveRefresh() {
         try {
-            LOG.debug("Performing proactive token refresh");
+            int attempt = currentRetryCount.get() + 1;
+            LOG.info("Proactive refresh: starting background token refresh (attempt {} of {})", attempt, maxRetryAttempts);
             refreshAndGetSecurityTokenInnerAsync(true, null, true)
                     .thenRun(() -> {
-                        LOG.debug("Proactive token refresh completed successfully");
-                        currentRetryCount = 0; // Reset retry counter on success
+                        LOG.info("Proactive refresh: token refresh completed successfully");
+                        currentRetryCount.set(0); // Reset retry counter on success
                         // onTokenRefreshCompleted will be called automatically and schedule the next refresh
                     })
                     .exceptionally(throwable -> {
-                        LOG.warn("Proactive token refresh failed, will retry with exponential backoff", throwable);
+                        LOG.warn("Proactive refresh: token refresh failed (attempt {}), scheduling retry if enabled", attempt, throwable);
                         scheduleRetryRefresh();
                         return null;
                     });
         } catch (Exception e) {
-            LOG.warn("Failed to initiate proactive token refresh", e);
+            LOG.warn("Proactive refresh: failed to initiate token refresh, scheduling retry if enabled", e);
             scheduleRetryRefresh();
         }
     }
@@ -419,15 +433,15 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
     private void scheduleRetryRefresh() {
         // Check if retries are enabled
         if (!enableRetryOnFailure) {
-            LOG.warn("Proactive token refresh failed, but retries are disabled. Skipping retry.");
-            currentRetryCount = 0; // Reset for future refresh cycles
+            LOG.warn("Proactive refresh: refresh failed and retries are disabled; skipping retry");
+            currentRetryCount.set(0); // Reset for future refresh cycles
             return;
         }
 
         // Check if we've exceeded max retry attempts
-        if (currentRetryCount >= maxRetryAttempts) {
-            LOG.warn("Proactive token refresh failed and max retry attempts ({}) exceeded. Stopping retries.", maxRetryAttempts);
-            currentRetryCount = 0; // Reset for future refresh cycles
+        if (currentRetryCount.get() >= maxRetryAttempts) {
+            LOG.warn("Proactive refresh: max retry attempts ({}) exceeded; stopping retries", maxRetryAttempts);
+            currentRetryCount.set(0); // Reset for future refresh cycles
             return;
         }
 
@@ -435,12 +449,12 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
             long retryDelay = retryDelaySeconds;
 
             // Exponential backoff: double the delay for each retry attempt
-            for (int i = 0; i < currentRetryCount; i++) {
+            for (int i = 0; i < currentRetryCount.get(); i++) {
                 retryDelay = Math.min(retryDelay * 2, 3600); // Cap at 1 hour
             }
 
-            LOG.info("Scheduling retry refresh in {} seconds (attempt {}/{})",
-                retryDelay, currentRetryCount + 1, maxRetryAttempts);
+            LOG.info("Proactive refresh: scheduling retry in {}s (attempt {}/{})",
+                retryDelay, currentRetryCount.get() + 1, maxRetryAttempts);
 
             scheduledRefreshTask = proactiveRefreshScheduler.schedule(
                     this::performProactiveRefresh,
@@ -448,7 +462,7 @@ public class WorkloadIdentityFederationClient extends AbstractAsyncFederationCli
                     TimeUnit.SECONDS);
 
             // Increment the retry count for next failure
-            currentRetryCount++;
+            currentRetryCount.incrementAndGet();
         }
     }
 

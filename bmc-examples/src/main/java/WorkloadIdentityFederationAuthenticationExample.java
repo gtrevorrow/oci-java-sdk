@@ -10,6 +10,9 @@ import com.oracle.bmc.objectstorage.ObjectStorageAsyncClient;
 import com.oracle.bmc.objectstorage.ObjectStorageClient;
 import com.oracle.bmc.objectstorage.requests.GetNamespaceRequest;
 import com.oracle.bmc.objectstorage.responses.GetNamespaceResponse;
+import com.oracle.bmc.responses.AsyncHandler;
+import java.util.concurrent.CompletableFuture;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -124,59 +127,119 @@ public class WorkloadIdentityFederationAuthenticationExample {
 
             } catch (Exception e) {
                 logger.severe("✗ Authentication or API call failed: " + e.getMessage());
-                e.printStackTrace();
+                logger.log(Level.SEVERE, "Stacktrace:", e);
                 logger.info("Continuing with async example despite sync authentication failure...");
             }
 
             // --- Demonstrate buildAsync() usage ---
             logger.info("");
             logger.info("=== Testing buildAsync() method ===");
-            logger.info("Creating second authentication provider asynchronously...");
+            logger.info("Creating authentication provider asynchronously (non-blocking)...");
+
+            // Use array to store reference for cleanup (works around final variable issue)
+            final WorkloadIdentityFederationAuthenticationDetailProvider[] asyncProviderRef = new WorkloadIdentityFederationAuthenticationDetailProvider[1];
 
             try {
-                // Create a second provider using buildAsync() - this pre-fetches the token
-                asyncAuthProvider = WorkloadIdentityFederationAuthenticationDetailProvider.builder()
-                        .tokenExchangeUrl(tokenExchangeUrl)
-                        .subjectTokenSupplier(() -> subjectToken)
-                        .clientCredential(clientCredential)
-                        .region(Region.fromRegionId(regionId))
-                        .secondsToExpireSessionTokenEarly(300L)
-                        .buildAsync()
-                        .get(); // Get the provider after async initialization
+                // Demonstrate the TRUE async benefit: non-blocking provider initialization
+                // This starts the async initialization but doesn't block the current thread
+                long startTime = System.currentTimeMillis();
 
-                // The .thenApply() is called only AFTER the provider is fully initialized with a valid token
-                // At this point, asyncAuthProvider is guaranteed to have a valid authentication token
-                // This eliminates the "cold start" delay that would occur with regular build()
+                logger.info("Starting async provider initialization...");
 
-                // Create a new Object Storage ASYNC client with the async-initialized provider
-                try (ObjectStorageAsyncClient asyncClient = ObjectStorageAsyncClient.builder()
-                        .build(asyncAuthProvider)) {
+                // Start the async pipeline directly from buildAsync() and compose further async work
+                CompletableFuture<Void> asyncFlow =
+                        WorkloadIdentityFederationAuthenticationDetailProvider.builder()
+                                .tokenExchangeUrl(tokenExchangeUrl)
+                                .subjectTokenSupplier(() -> subjectToken)
+                                .clientCredential(clientCredential)
+                                .region(Region.fromRegionId(regionId))
+                                .secondsToExpireSessionTokenEarly(300L)
+                                .buildAsync()
+                                .thenCompose(provider -> {
+                                    long initTime = System.currentTimeMillis() - startTime;
+                                    logger.info("✓ Async provider ready after " + initTime + "ms (including parallel work)");
+                                    logger.info("Provider is pre-authenticated - no 'cold start' delay for API calls!");
 
-                    logger.info("Making Object Storage API call with async provider...");
+                                    // Store provider reference for cleanup
+                                    asyncProviderRef[0] = provider;
 
-                    // This API call happens immediately without any authentication delay
-                    // because the token was pre-fetched during buildAsync()
-                    // ObjectStorageAsyncClient.getNamespace() returns CompletableFuture<GetNamespaceResponse>
-                    GetNamespaceResponse response = asyncClient.getNamespace(
-                            GetNamespaceRequest.builder().build(), null).get();
-                    String asyncNamespace = response.getValue();
-                    logger.info("✓ Async provider authentication successful!");
-                    logger.info("Account namespace (via async provider): " + asyncNamespace);
-                } catch (Exception e) {
-                    logger.severe("✗ Failed to create async client or make API call: " + e.getMessage());
-                    throw new RuntimeException("Failed to create async client", e);
+                                    // Create async client and make API call - all non-blocking
+                                    @SuppressWarnings("resource")
+                                    final ObjectStorageAsyncClient asyncClient = ObjectStorageAsyncClient.builder()
+                                            .build(provider);
+
+                                    logger.info("Making API call with pre-authenticated provider (non-blocking)...");
+
+                                    // Bridge OCI Future + AsyncHandler to CompletableFuture
+                                    final CompletableFuture<GetNamespaceResponse> apiCall = new CompletableFuture<>();
+                                    GetNamespaceRequest request = GetNamespaceRequest.builder().build();
+                                    asyncClient.getNamespace(
+                                            request,
+                                            new AsyncHandler<GetNamespaceRequest, GetNamespaceResponse>() {
+                                                @Override
+                                                public void onSuccess(GetNamespaceRequest req, GetNamespaceResponse resp) {
+                                                    apiCall.complete(resp);
+                                                }
+                                                @Override
+                                                public void onError(GetNamespaceRequest req, Throwable error) {
+                                                    apiCall.completeExceptionally(error);
+                                                }
+                                            }
+                                    );
+
+                                    // When the call completes, close the client and return the response future
+                                    return apiCall.whenComplete((r, t) -> {
+                                        try {
+                                            asyncClient.close();
+                                        } catch (Exception e) {
+                                            logger.warning("Warning during client cleanup: " + e.getMessage());
+                                        }
+                                    });
+                                })
+                                .thenAccept(response -> {
+                                    long totalTime = System.currentTimeMillis() - startTime;
+                                    logger.info("✓ Async API call completed in " + totalTime + "ms total");
+                                    logger.info("Account namespace (via async provider): " + response.getValue());
+                                    logger.info("This demonstrates true async benefits - no blocking, efficient resource usage!");
+                                })
+                                .exceptionally(throwable -> {
+                                    logger.severe("✗ Async provider or API call failed: " + throwable.getMessage());
+                                    return null;
+                                });
+
+                // While the provider is initializing asynchronously, we can do other work
+                logger.info("Provider initialization started. Current thread is NOT blocked!");
+                logger.info("Doing other work while provider initializes in background...");
+
+                // Simulate other work (this could be initializing other components,
+                // setting up configurations, etc.)
+                for (int i = 1; i <= 3; i++) {
+                    Thread.sleep(500); // Simulate 500ms of other work
+                    logger.info("  Doing other work... step " + i + "/3");
                 }
+
+                // Wait for the async pipeline to complete (provider init + first API call)
+                asyncFlow.join();
+
             } catch (Exception e) {
                 logger.severe("✗ Unexpected error in buildAsync example: " + e.getMessage());
-                e.printStackTrace();
+                logger.log(Level.SEVERE, "Stacktrace:", e);
             }
+
+            // Store the provider reference for cleanup
+            asyncAuthProvider = asyncProviderRef[0];
 
             logger.info("");
             logger.info("=== Example completed successfully! ===");
             logger.info("Both synchronous and asynchronous authentication providers worked correctly.");
 
-            // Demonstrate the automatic background refresh functionality
-            proactiveProvider = demonstrateProactiveRefresh(tokenExchangeUrl, clientCredential, regionId);
+            // Demonstrate the automatic background refresh functionality (async composition)
+            // Start the proactive refresh demo asynchronously and compose its first API call
+            CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> proactiveFlow =
+                    demonstrateProactiveRefreshAsync(tokenExchangeUrl, clientCredential, regionId);
+
+            // Wait for the proactive demo's first API call to complete (join at end of composed flow)
+            proactiveProvider = proactiveFlow.join();
 
         } finally {
             // Clean up ALL authentication providers to prevent resource leaks
@@ -214,26 +277,18 @@ public class WorkloadIdentityFederationAuthenticationExample {
     }
 
     /**
-     * Demonstrates the proactive background token refresh functionality.
-     * This method runs in a loop to show how the authentication provider
-     * automatically refreshes tokens in the background before they expire.
-     * 
-     * @return The created proactive provider for proper cleanup by the caller
+     * Asynchronously demonstrates proactive background token refresh: builds the provider with
+     * retry/circuit breaker (enables proactive refresh), then makes a single async API call
+     * using ObjectStorageAsyncClient. Returns the initialized provider for cleanup.
      */
-    private static WorkloadIdentityFederationAuthenticationDetailProvider demonstrateProactiveRefresh(String tokenExchangeUrl, String clientCredential, String regionId) {
+    private static CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> demonstrateProactiveRefreshAsync(
+            String tokenExchangeUrl, String clientCredential, String regionId) {
         logger.info("");
-        logger.info("=== Demonstrating Proactive Background Token Refresh ===");
-        logger.info("This demonstration shows automatic token refresh for 60-minute tokens...");
-        logger.info("With proactive refresh at 80% of token lifetime (48 minutes), you'll see:");
-        logger.info("• Consistent API performance throughout the token lifecycle");
-        logger.info("• Automatic background refresh around the 48-minute mark");
-        logger.info("• No blocking delays when tokens are refreshed");
+        logger.info("=== Demonstrating Proactive Background Token Refresh (Async) ===");
+        logger.info("This demonstrates async provider init and a non-blocking API call; proactive refresh will occur later in the background.");
 
-        WorkloadIdentityFederationAuthenticationDetailProvider proactiveProvider = null;
-        
-        try {
-            // Create an authentication provider with proactive refresh enabled
-            proactiveProvider = WorkloadIdentityFederationAuthenticationDetailProvider.builder()
+        // Build provider asynchronously with proactive refresh enabled (via retry configuration)
+        return WorkloadIdentityFederationAuthenticationDetailProvider.builder()
                 .tokenExchangeUrl(tokenExchangeUrl)
                 .subjectTokenSupplier(() -> {
                     String subjectToken = System.getenv("OCI_SUBJECT_TOKEN");
@@ -244,132 +299,43 @@ public class WorkloadIdentityFederationAuthenticationExample {
                 })
                 .clientCredential(clientCredential)
                 .region(Region.fromRegionId(regionId))
-                .secondsToExpireSessionTokenEarly(300L) // Refresh 5 minutes before expiration
-                .withCircuitBreaker() // Enable circuit breaker for robustness
-                .retryConfiguration(RetryConfiguration.BASIC) // Enable retry configuration (automatically enables proactive refresh)
-                .buildAsync() // Use async initialization with token pre-fetching
-                .join(); // Wait for initialization to complete
+                .secondsToExpireSessionTokenEarly(300L)
+                .withCircuitBreaker()
+                .retryConfiguration(RetryConfiguration.BASIC)
+                .buildAsync()
+                .thenCompose(provider -> {
+                    logger.info("✓ Proactive refresh provider initialized (async)");
+                    logger.info("  Proactive refresh will happen automatically before token expiry");
 
-            logger.info("✓ Proactive refresh provider initialized successfully");
-            logger.info("  Token refresh will happen automatically at ~48 minutes (80% of 60-minute lifetime)");
-            logger.info("  Retry configuration: BASIC (3 attempts, 30s delay with exponential backoff)");
-            logger.info("  Proactive refresh: ENABLED (automatically enabled via retry configuration)");
+                    // Create async client and perform a single non-blocking API call
+                    @SuppressWarnings("resource")
+                    final ObjectStorageAsyncClient client = ObjectStorageAsyncClient.builder().build(provider);
 
-            // Create a client with the proactive provider
-            try (ObjectStorageAsyncClient client = ObjectStorageAsyncClient.builder()
-                    .build(proactiveProvider)) {
-
-                logger.info("Starting continuous demonstration with API calls every 26 minutes...");
-                logger.info("This will run until you stop the application (Ctrl+C)");
-                logger.info("Expected token refresh cycle: ~48 minutes (80% of 60-minute lifetime)");
-                logger.info("With 26-minute intervals, you'll see refresh behavior clearly");
-
-                int iteration = 1;
-                long startTime = System.currentTimeMillis();
-
-                // Run continuously until interrupted
-                while (true) {
-                    try {
-                        double minutesElapsed = (System.currentTimeMillis() - startTime) / 60000.0;
-                        logger.info(String.format("=== API Call #%d (%.1f minutes elapsed) ===", iteration, minutesElapsed));
-
-                        // Predict when refresh should happen
-                        if (minutesElapsed > 45 && minutesElapsed < 50) {
-                            logger.info("⏰ Approaching 48-minute mark - proactive refresh should happen soon!");
-                        } else if (minutesElapsed > 70 && minutesElapsed < 85) {
-                            logger.info("🔄 In the refresh window (70-85 minutes) - background refresh may occur during this call");
-                        } else if (minutesElapsed > 93 && minutesElapsed < 98) {
-                            logger.info("⏰ Approaching second refresh cycle (~96 minutes) - should refresh again!");
+                    final CompletableFuture<GetNamespaceResponse> apiCall = new CompletableFuture<>();
+                    GetNamespaceRequest request = GetNamespaceRequest.builder().build();
+                    client.getNamespace(
+                        request,
+                        new AsyncHandler<GetNamespaceRequest, GetNamespaceResponse>() {
+                            @Override
+                            public void onSuccess(GetNamespaceRequest req, GetNamespaceResponse resp) {
+                                apiCall.complete(resp);
+                            }
+                            @Override
+                            public void onError(GetNamespaceRequest req, Throwable error) {
+                                apiCall.completeExceptionally(error);
+                            }
                         }
+                    );
 
-                        // Make an API call - this should never block for token refresh
-                        // because the proactive mechanism refreshes tokens in the background
-                        long apiCallStart = System.currentTimeMillis();
-
-                        GetNamespaceResponse response = client.getNamespace(
-                            GetNamespaceRequest.builder().build(), null).get();
-
-                        long apiCallDuration = System.currentTimeMillis() - apiCallStart;
-
-                        logger.info(String.format("��� API call completed in %d ms", apiCallDuration));
-                        logger.info(String.format("  Namespace: %s", response.getValue()));
-                        logger.info(String.format("  Total runtime: %.1f minutes", minutesElapsed));
-
-                        // Enhanced analysis of API call performance
-                        if (apiCallDuration > 2000) {
-                            logger.info(String.format("📊 API call took %d ms - this likely indicates " +
-                                "background token refresh occurred (expected behavior)",
-                                apiCallDuration));
-                        } else if (minutesElapsed > 70 && minutesElapsed < 85) {
-                            logger.info("✅ API call remained fast during refresh window - proactive refresh working perfectly!");
-                        }
-
-                        // Show token age estimation
-                        long tokenAgeMinutes = (long) (minutesElapsed % 60);
-                        if (tokenAgeMinutes == 0 && minutesElapsed > 50) {
-                            tokenAgeMinutes = 60; // Just refreshed
-                        }
-                        if (minutesElapsed > 50) {
-                            logger.info(String.format("📈 Current token estimated age: ~%d minutes (refresh cycle: every ~60 minutes)",
-                                tokenAgeMinutes));
-                        }
-
-                        iteration++;
-
-                        // Wait 26 minutes between API calls
-                        logger.info("Waiting 26 minutes before next API call...");
-                        logger.info("  Press Ctrl+C to stop the demonstration");
-                        Thread.sleep(1560_000); // 26 minutes (26 * 60 * 1000)
-
-                    } catch (InterruptedException e) {
-                        logger.info("Demonstration interrupted by user - shutting down gracefully");
-                        Thread.currentThread().interrupt();
-                        break;
-                    } catch (Exception e) {
-                        logger.warning(String.format("✗ API call #%d failed: %s", iteration, e.getMessage()));
-                        logger.info("Continuing with next iteration...");
-                        iteration++;
-
-                        // Wait a bit before retrying
-                        try {
-                            Thread.sleep(60_000); // 1 minute
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        }
-                    }
-                }
-
-                double totalMinutes = (System.currentTimeMillis() - startTime) / 60000.0;
-                logger.info(String.format("Completed %d API calls over %.1f minutes",
-                    iteration - 1, totalMinutes));
-
-                if (totalMinutes > 48) {
-                    logger.info("✓ Demonstration ran long enough to show automatic token refresh cycles!");
-                } else {
-                    logger.info("ℹ Demonstration stopped before first refresh cycle completed");
-                }
-
-            } catch (Exception e) {
-                logger.severe("✗ Failed to create client for proactive refresh demo: " + e.getMessage());
-                e.printStackTrace();
-            }
-            // NOTE: Provider cleanup now handled by main method's finally block
-
-        } catch (Exception e) {
-            logger.severe("✗ Failed to demonstrate proactive refresh: " + e.getMessage());
-            e.printStackTrace();
-        }
-
-        logger.info("");
-        logger.info("=== Proactive Refresh Demonstration Completed ===");
-        logger.info("Key observations for 60-minute tokens:");
-        logger.info("• API calls should remain consistently fast (< 2000ms)");
-        logger.info("• Proactive refresh happens automatically at ~48 minutes");
-        logger.info("• No blocking delays during token refresh");
-        logger.info("• Background token refresh is transparent to your application");
-        logger.info("• For best results, run this demo for 50+ minutes to see the refresh cycle");
-        
-        return proactiveProvider; // Return for cleanup by caller
+                    return apiCall
+                        .whenComplete((r, t) -> {
+                            try { client.close(); } catch (Exception e) { logger.warning("Warning during client cleanup: " + e.getMessage()); }
+                        })
+                        .thenApply(resp -> {
+                            logger.info("✓ Proactive demo async API call completed");
+                            logger.info("  Namespace: " + resp.getValue());
+                            return provider; // return provider for caller to manage lifecycle
+                        });
+                });
     }
 }
