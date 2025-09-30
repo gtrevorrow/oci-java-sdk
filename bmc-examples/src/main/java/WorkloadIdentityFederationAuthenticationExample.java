@@ -1,3 +1,4 @@
+
 /**
  * Copyright (c) 2016, 2025, Oracle and/or its affiliates.  All rights reserved.
  * This software is dual-licensed to you under the Universal Permissive License (UPL) 1.0 as shown at https://oss.oracle.com/licenses/upl or Apache License 2.0 as shown at http://www.apache.org/licenses/LICENSE-2.0. You may choose either license.
@@ -12,18 +13,23 @@ import com.oracle.bmc.objectstorage.requests.GetNamespaceRequest;
 import com.oracle.bmc.objectstorage.responses.GetNamespaceResponse;
 import com.oracle.bmc.responses.AsyncHandler;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * This example demonstrates how to use the WorkloadIdentityFederationAuthenticationDetailProvider
- * to authenticate calls to OCI APIs. It shows the basic usage and how to enable an optional
+ * This example demonstrates how to use the
+ * WorkloadIdentityFederationAuthenticationDetailProvider
+ * to authenticate calls to OCI APIs. It shows the basic usage and how to enable
+ * an optional
  * circuit breaker for the federation client.
  *
  * <p>
  * <b>Important: buildAsync() Method Benefits</b><br>
- * This example showcases the buildAsync() method, which provides true async semantics for
- * authentication provider initialization. The method offers several key advantages:
+ * This example showcases the buildAsync() method, which provides true async
+ * semantics for
+ * authentication provider initialization. The method offers several key
+ * advantages:
  * <ul>
  * <li>Token pre-fetching during provider initialization (not on first use)</li>
  * <li>Fail-fast behavior - authentication issues discovered early</li>
@@ -32,23 +38,30 @@ import java.util.logging.Logger;
  * <li>Elegant async composition with CompletableFuture chaining</li>
  * <li>Superior performance under concurrent load</li>
  * </ul>
- * The async benefits are achieved through the OCI SDK's HttpClient abstraction, which ensures
- * consistent non-blocking behavior regardless of the underlying HTTP client implementation.
+ * The async benefits are achieved through the OCI SDK's HttpClient abstraction,
+ * which ensures
+ * consistent non-blocking behavior regardless of the underlying HTTP client
+ * implementation.
  * </p>
  *
  * <p>
  * This example requires the following command-line arguments:
  * <ol>
- * <li>tokenExchangeUrl: The URL of the token exchange endpoint (e.g., from an Identity Domain).</li>
- * <li>clientCredential: The client credential for basic authentication (e.g., "client_id:client_secret").</li>
+ * <li>tokenExchangeUrl: The URL of the token exchange endpoint (e.g., from an
+ * Identity Domain).</li>
+ * <li>clientCredential: The client credential for basic authentication (e.g.,
+ * "client_id:client_secret").</li>
  * <li>regionId: The OCI region ID (e.g., "us-ashburn-1").</li>
- * <li>compartmentId: The OCID of the compartment to query (e.g., your tenancy OCID).</li>
+ * <li>compartmentId: The OCID of the compartment to query (e.g., your tenancy
+ * OCID).</li>
  * </ol>
- * It also requires the `OCI_SUBJECT_TOKEN` environment variable to be set with the subject token.
+ * It also requires the `OCI_SUBJECT_TOKEN` environment variable to be set with
+ * the subject token.
  */
 public class WorkloadIdentityFederationAuthenticationExample {
 
-    private static final Logger logger = Logger.getLogger(WorkloadIdentityFederationAuthenticationExample.class.getName());
+    private static final Logger logger = Logger
+            .getLogger(WorkloadIdentityFederationAuthenticationExample.class.getName());
 
     public static void main(String[] args) {
         logger.info("=== Oracle Cloud Infrastructure Workload Identity Federation Authentication Example ===");
@@ -64,6 +77,10 @@ public class WorkloadIdentityFederationAuthenticationExample {
         final String clientCredential = args[1];
         final String regionId = args[2];
         final String compartmentId = args[3];
+
+        // Note: this example expects real OCI values. Placeholder endpoints,
+        // credentials, or subject tokens
+        // will result in 403 Access Denied responses during the token exchange flow.
 
         // Pull subject token from environment variable
         final String subjectToken = System.getenv("OCI_SUBJECT_TOKEN");
@@ -83,14 +100,15 @@ public class WorkloadIdentityFederationAuthenticationExample {
         logger.info("");
 
         // --- Create the authentication provider ---
-        // This is the basic configuration that relies on SDK defaults for HTTP client settings.
-        WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder =
-                WorkloadIdentityFederationAuthenticationDetailProvider.builder()
-                        .tokenExchangeUrl(tokenExchangeUrl)
-                        .subjectTokenSupplier(() -> subjectToken)
-                        .clientCredential(clientCredential)
-                        .region(Region.fromRegionId(regionId))
-                        .secondsToExpireSessionTokenEarly(300L); // Optional: 5 minutes early expiration
+        // This is the basic configuration that relies on SDK defaults for HTTP client
+        // settings.
+        WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder = WorkloadIdentityFederationAuthenticationDetailProvider
+                .builder()
+                .tokenExchangeUrl(tokenExchangeUrl)
+                .subjectTokenSupplier(() -> subjectToken)
+                .clientCredential(clientCredential)
+                .region(Region.fromRegionId(regionId))
+                .secondsToExpireSessionTokenEarly(300L); // Optional: 5 minutes early expiration
 
         // --- Optional: Enable a circuit breaker ---
         // For added resilience, you can enable a circuit breaker with default settings.
@@ -146,66 +164,67 @@ public class WorkloadIdentityFederationAuthenticationExample {
 
                 logger.info("Starting async provider initialization...");
 
-                // Start the async pipeline directly from buildAsync() and compose further async work
-                CompletableFuture<Void> asyncFlow =
-                        WorkloadIdentityFederationAuthenticationDetailProvider.builder()
-                                .tokenExchangeUrl(tokenExchangeUrl)
-                                .subjectTokenSupplier(() -> subjectToken)
-                                .clientCredential(clientCredential)
-                                .region(Region.fromRegionId(regionId))
-                                .secondsToExpireSessionTokenEarly(300L)
-                                .buildAsync()
-                                .thenCompose(provider -> {
-                                    long initTime = System.currentTimeMillis() - startTime;
-                                    logger.info("✓ Async provider ready after " + initTime + "ms (including parallel work)");
-                                    logger.info("Provider is pre-authenticated - no 'cold start' delay for API calls!");
+                // Start the async pipeline directly from buildAsync() and compose further async
+                // work
+                CompletableFuture<Void> asyncFlow = WorkloadIdentityFederationAuthenticationDetailProvider.builder()
+                        .tokenExchangeUrl(tokenExchangeUrl)
+                        .subjectTokenSupplier(() -> subjectToken)
+                        .clientCredential(clientCredential)
+                        .region(Region.fromRegionId(regionId))
+                        .secondsToExpireSessionTokenEarly(300L)
+                        .buildAsync()
+                        .thenCompose(provider -> {
+                            long initTime = System.currentTimeMillis() - startTime;
+                            logger.info("✓ Async provider ready after " + initTime + "ms (including parallel work)");
+                            logger.info("Provider is pre-authenticated - no 'cold start' delay for API calls!");
 
-                                    // Store provider reference for cleanup
-                                    asyncProviderRef[0] = provider;
+                            // Store provider reference for cleanup
+                            asyncProviderRef[0] = provider;
 
-                                    // Create async client and make API call - all non-blocking
-                                    @SuppressWarnings("resource")
-                                    final ObjectStorageAsyncClient asyncClient = ObjectStorageAsyncClient.builder()
-                                            .build(provider);
+                            // Create async client and make API call - all non-blocking
+                            @SuppressWarnings("resource")
+                            final ObjectStorageAsyncClient asyncClient = ObjectStorageAsyncClient.builder()
+                                    .build(provider);
 
-                                    logger.info("Making API call with pre-authenticated provider (non-blocking)...");
+                            logger.info("Making API call with pre-authenticated provider (non-blocking)...");
 
-                                    // Bridge OCI Future + AsyncHandler to CompletableFuture
-                                    final CompletableFuture<GetNamespaceResponse> apiCall = new CompletableFuture<>();
-                                    GetNamespaceRequest request = GetNamespaceRequest.builder().build();
-                                    asyncClient.getNamespace(
-                                            request,
-                                            new AsyncHandler<GetNamespaceRequest, GetNamespaceResponse>() {
-                                                @Override
-                                                public void onSuccess(GetNamespaceRequest req, GetNamespaceResponse resp) {
-                                                    apiCall.complete(resp);
-                                                }
-                                                @Override
-                                                public void onError(GetNamespaceRequest req, Throwable error) {
-                                                    apiCall.completeExceptionally(error);
-                                                }
-                                            }
-                                    );
+                            // Bridge OCI Future + AsyncHandler to CompletableFuture
+                            final CompletableFuture<GetNamespaceResponse> apiCall = new CompletableFuture<>();
+                            GetNamespaceRequest request = GetNamespaceRequest.builder().build();
+                            asyncClient.getNamespace(
+                                    request,
+                                    new AsyncHandler<GetNamespaceRequest, GetNamespaceResponse>() {
+                                        @Override
+                                        public void onSuccess(GetNamespaceRequest req, GetNamespaceResponse resp) {
+                                            apiCall.complete(resp);
+                                        }
 
-                                    // When the call completes, close the client and return the response future
-                                    return apiCall.whenComplete((r, t) -> {
-                                        try {
-                                            asyncClient.close();
-                                        } catch (Exception e) {
-                                            logger.warning("Warning during client cleanup: " + e.getMessage());
+                                        @Override
+                                        public void onError(GetNamespaceRequest req, Throwable error) {
+                                            apiCall.completeExceptionally(error);
                                         }
                                     });
-                                })
-                                .thenAccept(response -> {
-                                    long totalTime = System.currentTimeMillis() - startTime;
-                                    logger.info("✓ Async API call completed in " + totalTime + "ms total");
-                                    logger.info("Account namespace (via async provider): " + response.getValue());
-                                    logger.info("This demonstrates true async benefits - no blocking, efficient resource usage!");
-                                })
-                                .exceptionally(throwable -> {
-                                    logger.severe("✗ Async provider or API call failed: " + throwable.getMessage());
-                                    return null;
-                                });
+
+                            // When the call completes, close the client and return the response future
+                            return apiCall.whenComplete((r, t) -> {
+                                try {
+                                    asyncClient.close();
+                                } catch (Exception e) {
+                                    logger.warning("Warning during client cleanup: " + e.getMessage());
+                                }
+                            });
+                        })
+                        .thenAccept(response -> {
+                            long totalTime = System.currentTimeMillis() - startTime;
+                            logger.info("✓ Async API call completed in " + totalTime + "ms total");
+                            logger.info("Account namespace (via async provider): " + response.getValue());
+                            logger.info(
+                                    "This demonstrates true async benefits - no blocking, efficient resource usage!");
+                        })
+                        .exceptionally(throwable -> {
+                            logger.severe("✗ Async provider or API call failed: " + throwable.getMessage());
+                            return null;
+                        });
 
                 // While the provider is initializing asynchronously, we can do other work
                 logger.info("Provider initialization started. Current thread is NOT blocked!");
@@ -233,18 +252,27 @@ public class WorkloadIdentityFederationAuthenticationExample {
             logger.info("=== Example completed successfully! ===");
             logger.info("Both synchronous and asynchronous authentication providers worked correctly.");
 
-            // Demonstrate the automatic background refresh functionality (async composition)
-            // Start the proactive refresh demo asynchronously and compose its first API call
-            CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> proactiveFlow =
-                    demonstrateProactiveRefreshAsync(tokenExchangeUrl, clientCredential, regionId);
+            // Demonstrate the automatic background refresh functionality (async
+            // composition)
+            // Start the proactive refresh demo asynchronously and compose its first API
+            // call
+            CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> proactiveFlow = demonstrateProactiveRefreshAsync(
+                    tokenExchangeUrl, clientCredential, regionId);
 
-            // Wait for the proactive demo's first API call to complete (join at end of composed flow)
+            // Wait for the proactive demo's first API call to complete (join at end of
+            // composed flow)
             proactiveProvider = proactiveFlow.join();
+
+            logger.info("");
+            logger.info("Proactive refresh demo is now running. Watch for automatic token refresh logs.");
+            logger.info("Press Ctrl+C to exit once you've observed the proactive refresh behavior.");
+
+            waitForShutdownSignal();
 
         } finally {
             // Clean up ALL authentication providers to prevent resource leaks
             logger.info("Shutting down authentication providers...");
-            
+
             if (authProvider != null) {
                 try {
                     authProvider.shutdown();
@@ -253,7 +281,7 @@ public class WorkloadIdentityFederationAuthenticationExample {
                     logger.warning("Warning: Failed to shutdown sync provider: " + e.getMessage());
                 }
             }
-            
+
             if (asyncAuthProvider != null) {
                 try {
                     asyncAuthProvider.shutdown();
@@ -262,7 +290,7 @@ public class WorkloadIdentityFederationAuthenticationExample {
                     logger.warning("Warning: Failed to shutdown async provider: " + e.getMessage());
                 }
             }
-            
+
             if (proactiveProvider != null) {
                 try {
                     proactiveProvider.shutdown();
@@ -271,23 +299,46 @@ public class WorkloadIdentityFederationAuthenticationExample {
                     logger.warning("Warning: Failed to shutdown proactive provider: " + e.getMessage());
                 }
             }
-            
+
             logger.info("✓ All authentication providers shut down completed");
         }
     }
 
+    private static void waitForShutdownSignal() {
+        CountDownLatch shutdownLatch = new CountDownLatch(1);
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            logger.info("Shutdown signal received. Preparing to clean up authentication providers...");
+            shutdownLatch.countDown();
+        }));
+
+        try {
+            shutdownLatch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.warning("Shutdown wait interrupted; proceeding with cleanup.");
+        }
+    }
+
     /**
-     * Asynchronously demonstrates proactive background token refresh: builds the provider with
-     * retry/circuit breaker (enables proactive refresh), then makes a single async API call
-     * using ObjectStorageAsyncClient. Returns the initialized provider for cleanup.
+     * Asynchronously demonstrates proactive background token refresh: builds the
+     * provider with
+     * circuit breaker support and a retry configuration (the retry configuration
+     * automatically
+     * enables proactive refresh), then makes a single async API call using
+     * ObjectStorageAsyncClient.
+     * Returns the initialized provider for cleanup.
      */
     private static CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> demonstrateProactiveRefreshAsync(
             String tokenExchangeUrl, String clientCredential, String regionId) {
         logger.info("");
         logger.info("=== Demonstrating Proactive Background Token Refresh (Async) ===");
-        logger.info("This demonstrates async provider init and a non-blocking API call; proactive refresh will occur later in the background.");
+        logger.info(
+                "This demonstrates async provider init and a non-blocking API call; proactive refresh will occur later in the background.");
 
-        // Build provider asynchronously with proactive refresh enabled (via retry configuration)
+        // Build provider asynchronously with circuit breaker support and retry
+        // configuration
+        // (retry configuration automatically enables proactive refresh)
         return WorkloadIdentityFederationAuthenticationDetailProvider.builder()
                 .tokenExchangeUrl(tokenExchangeUrl)
                 .subjectTokenSupplier(() -> {
@@ -314,28 +365,32 @@ public class WorkloadIdentityFederationAuthenticationExample {
                     final CompletableFuture<GetNamespaceResponse> apiCall = new CompletableFuture<>();
                     GetNamespaceRequest request = GetNamespaceRequest.builder().build();
                     client.getNamespace(
-                        request,
-                        new AsyncHandler<GetNamespaceRequest, GetNamespaceResponse>() {
-                            @Override
-                            public void onSuccess(GetNamespaceRequest req, GetNamespaceResponse resp) {
-                                apiCall.complete(resp);
-                            }
-                            @Override
-                            public void onError(GetNamespaceRequest req, Throwable error) {
-                                apiCall.completeExceptionally(error);
-                            }
-                        }
-                    );
+                            request,
+                            new AsyncHandler<GetNamespaceRequest, GetNamespaceResponse>() {
+                                @Override
+                                public void onSuccess(GetNamespaceRequest req, GetNamespaceResponse resp) {
+                                    apiCall.complete(resp);
+                                }
+
+                                @Override
+                                public void onError(GetNamespaceRequest req, Throwable error) {
+                                    apiCall.completeExceptionally(error);
+                                }
+                            });
 
                     return apiCall
-                        .whenComplete((r, t) -> {
-                            try { client.close(); } catch (Exception e) { logger.warning("Warning during client cleanup: " + e.getMessage()); }
-                        })
-                        .thenApply(resp -> {
-                            logger.info("✓ Proactive demo async API call completed");
-                            logger.info("  Namespace: " + resp.getValue());
-                            return provider; // return provider for caller to manage lifecycle
-                        });
+                            .whenComplete((r, t) -> {
+                                try {
+                                    client.close();
+                                } catch (Exception e) {
+                                    logger.warning("Warning during client cleanup: " + e.getMessage());
+                                }
+                            })
+                            .thenApply(resp -> {
+                                logger.info("✓ Proactive demo async API call completed");
+                                logger.info("  Namespace: " + resp.getValue());
+                                return provider; // return provider for caller to manage lifecycle
+                            });
                 });
     }
 }
