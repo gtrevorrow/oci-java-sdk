@@ -14,6 +14,7 @@ import com.oracle.bmc.objectstorage.responses.GetNamespaceResponse;
 import com.oracle.bmc.responses.AsyncHandler;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -267,7 +268,16 @@ public class WorkloadIdentityFederationAuthenticationExample {
             logger.info("Proactive refresh demo is now running. Watch for automatic token refresh logs.");
             logger.info("Press Ctrl+C to exit once you've observed the proactive refresh behavior.");
 
-            waitForShutdownSignal();
+            final AtomicBoolean keepRunning = new AtomicBoolean(true);
+            Thread namespaceMonitorThread = null;
+            if (proactiveProvider != null) {
+                namespaceMonitorThread = startNamespaceHeartbeat(proactiveProvider, keepRunning);
+            } else {
+                keepRunning.set(false);
+                logger.warning("Proactive provider was not initialized; namespace heartbeat monitor disabled.");
+            }
+
+            waitForShutdownSignal(keepRunning, namespaceMonitorThread);
 
         } finally {
             // Clean up ALL authentication providers to prevent resource leaks
@@ -304,19 +314,92 @@ public class WorkloadIdentityFederationAuthenticationExample {
         }
     }
 
-    private static void waitForShutdownSignal() {
+    private static Thread startNamespaceHeartbeat(
+            WorkloadIdentityFederationAuthenticationDetailProvider provider,
+            AtomicBoolean keepRunning) {
+
+        Thread monitorThread = new Thread(
+                () -> {
+                    final int intervalSeconds = 30;
+
+                    while (keepRunning.get()) {
+                        try (ObjectStorageClient client = ObjectStorageClient.builder().build(provider)) {
+                            GetNamespaceResponse response = client.getNamespace(GetNamespaceRequest.builder().build());
+                            logger.info(
+                                    "Namespace heartbeat successful; namespace = "
+                                            + response.getValue());
+                            logger.info(
+                                    "Watching for proactive refresh logs; next namespace heartbeat countdown starts now.");
+                        } catch (Exception e) {
+                            logger.log(Level.WARNING, "Namespace heartbeat failed", e);
+                        }
+
+                        int remainingSeconds = intervalSeconds;
+                        while (keepRunning.get() && remainingSeconds > 0) {
+                            try {
+                                Thread.sleep(1_000L);
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                logger.info("Namespace heartbeat monitor interrupted; exiting.");
+                                return;
+                            }
+
+                            remainingSeconds--;
+                            if (!keepRunning.get()) {
+                                break;
+                            }
+
+                            if (remainingSeconds % 5 == 0 || remainingSeconds <= 3) {
+                                logger.info(
+                                        "Next namespace heartbeat in "
+                                                + remainingSeconds
+                                                + "s (Ctrl+C to exit).");
+                            }
+                        }
+                    }
+
+                    logger.info("Namespace heartbeat monitor stopped.");
+                },
+                "NamespaceHeartbeatMonitor");
+
+        monitorThread.setDaemon(true);
+        monitorThread.start();
+        return monitorThread;
+    }
+
+    private static void waitForShutdownSignal(AtomicBoolean keepRunning, Thread monitorThread) {
         CountDownLatch shutdownLatch = new CountDownLatch(1);
 
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            logger.info("Shutdown signal received. Preparing to clean up authentication providers...");
-            shutdownLatch.countDown();
-        }));
+        Runtime.getRuntime()
+                .addShutdownHook(
+                        new Thread(
+                                () -> {
+                                    logger.info(
+                                            "Shutdown signal received. Preparing to clean up authentication providers...");
+                                    keepRunning.set(false);
+                                    if (monitorThread != null) {
+                                        monitorThread.interrupt();
+                                    }
+                                    shutdownLatch.countDown();
+                                }));
 
         try {
             shutdownLatch.await();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.warning("Shutdown wait interrupted; proceeding with cleanup.");
+        } finally {
+            keepRunning.set(false);
+            if (monitorThread != null && monitorThread.isAlive()) {
+                monitorThread.interrupt();
+                try {
+                    monitorThread.join(5_000L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    logger.warning(
+                            "Interrupted while waiting for namespace heartbeat monitor to terminate.");
+                }
+            }
         }
     }
 
