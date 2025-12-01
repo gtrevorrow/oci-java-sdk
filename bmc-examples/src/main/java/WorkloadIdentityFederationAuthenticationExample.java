@@ -285,28 +285,28 @@ public class WorkloadIdentityFederationAuthenticationExample {
 
             if (authProvider != null) {
                 try {
-                    authProvider.shutdown();
-                    logger.info("✓ Synchronous provider shut down");
+                    authProvider.close();
+                    logger.info("✓ Synchronous provider closed");
                 } catch (Exception e) {
-                    logger.warning("Warning: Failed to shutdown sync provider: " + e.getMessage());
+                    logger.warning("Warning: Failed to close sync provider: " + e.getMessage());
                 }
             }
 
             if (asyncAuthProvider != null) {
                 try {
-                    asyncAuthProvider.shutdown();
-                    logger.info("✓ Async provider shut down");
+                    asyncAuthProvider.close();
+                    logger.info("✓ Async provider closed");
                 } catch (Exception e) {
-                    logger.warning("Warning: Failed to shutdown async provider: " + e.getMessage());
+                    logger.warning("Warning: Failed to close async provider: " + e.getMessage());
                 }
             }
 
             if (proactiveProvider != null) {
                 try {
-                    proactiveProvider.shutdown();
-                    logger.info("✓ Proactive refresh provider shut down");
+                    proactiveProvider.close();
+                    logger.info("✓ Proactive refresh provider closed");
                 } catch (Exception e) {
-                    logger.warning("Warning: Failed to shutdown proactive provider: " + e.getMessage());
+                    logger.warning("Warning: Failed to close proactive provider: " + e.getMessage());
                 }
             }
 

@@ -43,15 +43,15 @@ import org.slf4j.Logger;
  * </ol>
  *
  * <p>
- * When proactive refresh is enabled (via retry configuration), it is crucial to call {@link #shutdown()} when the provider
- * is no longer needed to release the background scheduling thread.
+ * When proactive refresh is enabled (via retry configuration), it is crucial to call {@link #close()} (or {@link #shutdown()})
+ * when the provider is no longer needed to release the background scheduling thread.
  *
  * @see WorkloadIdentityFederationAuthenticationDetailProviderBuilder
  */
 @AuthCachingPolicy(cacheKeyId = false, cachePrivateKey = false)
 public class WorkloadIdentityFederationAuthenticationDetailProvider
-        implements BasicAuthenticationDetailsProvider, RegionProvider, RefreshableOnNotAuthenticatedProvider<String>,
-        ProvidesConfigurableRefresh {
+    implements BasicAuthenticationDetailsProvider, RegionProvider, RefreshableOnNotAuthenticatedProvider<String>,
+    ProvidesConfigurableRefresh, AutoCloseable {
 
     private static final Logger LOG = org.slf4j.LoggerFactory.getLogger(WorkloadIdentityFederationAuthenticationDetailProvider.class);
 
@@ -451,5 +451,10 @@ public class WorkloadIdentityFederationAuthenticationDetailProvider
             ((WorkloadIdentityFederationClient) federationClient).shutdown();
             LOG.debug("Authentication provider shut down");
         }
+    }
+
+    @Override
+    public void close() {
+        shutdown();
     }
 }
