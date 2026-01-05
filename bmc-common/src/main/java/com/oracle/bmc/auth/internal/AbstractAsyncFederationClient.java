@@ -3,7 +3,6 @@
  * This software is dual-licensed to you under the Universal Permissive License (UPL) 1.0 as shown at https://oss.oracle.com/licenses/upl or Apache License 2.0 as shown at http://www.apache.org/licenses/LICENSE-2.0. You may choose either license.
  */
 
-
 package com.oracle.bmc.auth.internal;
 
 import java.time.Duration;
@@ -22,33 +21,44 @@ import org.slf4j.Logger;
 import java.net.URI;
 import java.util.List;
 import java.util.Optional;
+
 /**
- * Abstract base class for asynchronous federation clients that handle security token retrieval and refresh logic.
+ * Abstract base class for asynchronous federation clients that handle security
+ * token retrieval and refresh logic.
  * <p>
- * This class manages the lifecycle of security tokens, including refreshing tokens when they are about to expire,
- * and optionally refreshing session keys. It ensures that only one token refresh operation is in progress at any time,
+ * This class manages the lifecycle of security tokens, including refreshing
+ * tokens when they are about to expire,
+ * and optionally refreshing session keys. It ensures that only one token
+ * refresh operation is in progress at any time,
  * and provides mechanisms to reuse pending refresh operations.
- * The class is thread-safe and uses a lock to synchronize access to the refresh logic.
+ * The class is thread-safe and uses a lock to synchronize access to the refresh
+ * logic.
  * </p>
  *
  * <p>
  * <b>Async Implementation Note</b><br>
- * This implementation provides true asynchronous behavior through CompletableFuture-based APIs.
- * The underlying HTTP operations are handled by the OCI SDK's HttpClient abstraction, which ensures
- * consistent non-blocking semantics regardless of the specific HTTP client implementation in use.
+ * This implementation provides true asynchronous behavior through
+ * CompletableFuture-based APIs.
+ * The underlying HTTP operations are handled by the OCI SDK's HttpClient
+ * abstraction, which ensures
+ * consistent non-blocking semantics regardless of the specific HTTP client
+ * implementation in use.
  * This design enables:
  * <ul>
  * <li>Non-blocking token retrieval and refresh operations</li>
  * <li>Proper CompletableFuture composition and chaining</li>
  * <li>Concurrent token operations without thread blocking</li>
- * <li>Consistent async behavior across different HTTP client implementations</li>
+ * <li>Consistent async behavior across different HTTP client
+ * implementations</li>
  * </ul>
- * Features like buildAsync() in authentication providers rely on this async foundation to provide
+ * Features like buildAsync() in authentication providers rely on this async
+ * foundation to provide
  * token pre-fetching and fail-fast authentication initialization.
  * </p>
  *
  * <p>
- * Subclasses must implement {@link #getSecurityTokenFromServer()} to define how security tokens are fetched from the server.
+ * Subclasses must implement {@link #getSecurityTokenFromServer()} to define how
+ * security tokens are fetched from the server.
  * </p>
  *
  * @see AsyncFederationClient
@@ -57,7 +67,8 @@ import java.util.Optional;
 public abstract class AbstractAsyncFederationClient
         implements AsyncFederationClient, ProvidesConfigurableRefreshAsync {
     private static final Logger LOG = org.slf4j.LoggerFactory.getLogger(AbstractAsyncFederationClient.class);
-    protected volatile SecurityTokenAdapter securityTokenAdapter; // volatile to ensure immediate visibility across threads
+    protected volatile SecurityTokenAdapter securityTokenAdapter; // volatile to ensure immediate visibility across
+                                                                  // threads
     protected final SessionKeySupplier sessionKeySupplier;
     protected final OciCircuitBreaker circuitBreaker;
     protected final HttpClient federationClient;
@@ -107,19 +118,18 @@ public abstract class AbstractAsyncFederationClient
         return refreshAndGetSecurityTokenInnerAsync(true, time, refreshKeys);
     }
 
-    @SuppressWarnings("ConstantConditions")
     protected CompletableFuture<String> refreshAndGetSecurityTokenInnerAsync(
             final boolean doFinalTokenValidityCheck, Duration time, boolean refreshKeys) {
-        // double-check locking ...First check if the token is valid
-        boolean isValid = securityTokenAdapter.isValid(Optional.ofNullable(time));
 
-        if (doFinalTokenValidityCheck && isValid) {
-            LOG.debug("Token is valid, returning existing token");
-            return CompletableFuture.completedFuture(securityTokenAdapter.getSecurityToken());
+        if (doFinalTokenValidityCheck) {
+            boolean isValid = securityTokenAdapter.isValid(Optional.ofNullable(time));
+            if (isValid) {
+                LOG.debug("Token is valid, returning existing token");
+                return CompletableFuture.completedFuture(securityTokenAdapter.getSecurityToken());
+            }
         }
 
         synchronized (refreshLock) {
-            // double-check locking  .. Check again after acquiring the lock
             if (pendingRefresh != null && !pendingRefresh.isCompletedExceptionally()) {
                 LOG.debug("Reusing existing pending refresh: {}", pendingRefresh);
                 return pendingRefresh.thenApply(SecurityTokenAdapter::getSecurityToken);
@@ -149,7 +159,8 @@ public abstract class AbstractAsyncFederationClient
 
     /**
      * Hook method called after a successful token refresh.
-     * Subclasses can override this to perform additional actions like scheduling proactive refreshes.
+     * Subclasses can override this to perform additional actions like scheduling
+     * proactive refreshes.
      */
     protected abstract void onTokenRefreshCompleted(Duration tokenValidDuration);
 
@@ -157,9 +168,8 @@ public abstract class AbstractAsyncFederationClient
         return refreshAndGetSecurityTokenInnerAsync(true, null, true);
     }
 
-
     /**
-     * Gets a security token from the federation endpoint. This will be a long-lived
+     * Gets a security token from the federation endpoint. This will be short-lived
      * token used to authenticate requests to OCI services.
      *
      * @return the security token

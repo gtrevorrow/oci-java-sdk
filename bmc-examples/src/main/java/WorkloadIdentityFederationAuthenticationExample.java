@@ -5,16 +5,20 @@
  */
 
 import com.oracle.bmc.Region;
-import com.oracle.bmc.auth.RetryConfiguration;
 import com.oracle.bmc.auth.WorkloadIdentityFederationAuthenticationDetailProvider;
 import com.oracle.bmc.objectstorage.ObjectStorageAsyncClient;
 import com.oracle.bmc.objectstorage.ObjectStorageClient;
 import com.oracle.bmc.objectstorage.requests.GetNamespaceRequest;
 import com.oracle.bmc.objectstorage.responses.GetNamespaceResponse;
 import com.oracle.bmc.responses.AsyncHandler;
+import com.oracle.bmc.retrier.DefaultRetryCondition;
+import com.oracle.bmc.retrier.RetryConfiguration;
+import com.oracle.bmc.waiter.ExponentialBackoffDelayStrategyWithJitter;
+import com.oracle.bmc.waiter.MaxAttemptsTerminationStrategy;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -24,6 +28,19 @@ import java.util.logging.Logger;
  * to authenticate calls to OCI APIs. It shows the basic usage and how to enable
  * an optional
  * circuit breaker for the federation client.
+ *
+ * <p>
+ * <b>Retry behavior</b><br>
+ * If you configure {@link com.oracle.bmc.retrier.RetryConfiguration} via
+ * {@code builder.retryConfiguration(...)}, the provider will:
+ * <ul>
+ * <li>Enable proactive background refresh</li>
+ * <li>Enable SDK-level retries for the token exchange call (using the SDK
+ * retrier via ClientCall)</li>
+ * </ul>
+ * The retry delay is exponential backoff with jitter, capped by the delay
+ * strategy's max delay.
+ * </p>
  *
  * <p>
  * <b>Important: buildAsync() Method Benefits</b><br>
@@ -39,10 +56,11 @@ import java.util.logging.Logger;
  * <li>Elegant async composition with CompletableFuture chaining</li>
  * <li>Superior performance under concurrent load</li>
  * </ul>
- * The async benefits are achieved through the OCI SDK's HttpClient abstraction,
- * which ensures
- * consistent non-blocking behavior regardless of the underlying HTTP client
- * implementation.
+ * The async benefits here come from composing the token exchange on dedicated
+ * executors (wrapping the synchronous ClientCall) so the caller's thread is not
+ * blocked while the exchange runs. The underlying HTTP pipeline is still
+ * synchronous; the non-blocking behavior is provided by the CompletableFuture
+ * orchestration, not by a non-blocking HTTP transport.
  * </p>
  *
  * <p>
@@ -80,8 +98,8 @@ public class WorkloadIdentityFederationAuthenticationExample {
         final String compartmentId = args[3];
 
         // Note: this example expects real OCI values. Placeholder endpoints,
-        // credentials, or subject tokens
-        // will result in 403 Access Denied responses during the token exchange flow.
+        // credentials, or subject tokens will result in 403 Access Denied
+        // responses during the token exchange flow.
 
         // Pull subject token from environment variable
         final String subjectToken = System.getenv("OCI_SUBJECT_TOKEN");
@@ -116,6 +134,14 @@ public class WorkloadIdentityFederationAuthenticationExample {
         // This is useful if the token exchange endpoint is temporarily unavailable.
         // To enable it, uncomment the following line:
         // builder.withCircuitBreaker();
+
+        // --- Optional: Enable retries and proactive refresh ---
+        // Setting a retry configuration enables proactive background refresh AND
+        // enables SDK retry behavior for the token exchange call.
+        //
+        // NOTE: the delay strategy controls backoff/jitter and max delay.
+        // To enable it, uncomment one of the following lines:
+        // builder.retryConfiguration(buildTokenExchangeRetryConfiguration());
 
         WorkloadIdentityFederationAuthenticationDetailProvider authProvider = builder.build();
         WorkloadIdentityFederationAuthenticationDetailProvider asyncAuthProvider = null;
@@ -254,7 +280,7 @@ public class WorkloadIdentityFederationAuthenticationExample {
             logger.info("Both synchronous and asynchronous authentication providers worked correctly.");
 
             // Demonstrate the automatic background refresh functionality (async
-            // composition)
+            // composition).
             // Start the proactive refresh demo asynchronously and compose its first API
             // call
             CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> proactiveFlow = demonstrateProactiveRefreshAsync(
@@ -405,11 +431,9 @@ public class WorkloadIdentityFederationAuthenticationExample {
 
     /**
      * Asynchronously demonstrates proactive background token refresh: builds the
-     * provider with
-     * circuit breaker support and a retry configuration (the retry configuration
-     * automatically
-     * enables proactive refresh), then makes a single async API call using
-     * ObjectStorageAsyncClient.
+     * provider with circuit breaker support and a retry configuration
+     * (the retry configuration automatically enables proactive refresh), then
+     * makes a single async API call using ObjectStorageAsyncClient.
      * Returns the initialized provider for cleanup.
      */
     private static CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> demonstrateProactiveRefreshAsync(
@@ -420,8 +444,12 @@ public class WorkloadIdentityFederationAuthenticationExample {
                 "This demonstrates async provider init and a non-blocking API call; proactive refresh will occur later in the background.");
 
         // Build provider asynchronously with circuit breaker support and retry
-        // configuration
-        // (retry configuration automatically enables proactive refresh)
+        // configuration.
+        // The retry configuration:
+        // - enables proactive background refresh
+        // - enables SDK retries for the token exchange call (exponential backoff with
+        // jitter,
+        // capped by retryDelaySeconds)
         return WorkloadIdentityFederationAuthenticationDetailProvider.builder()
                 .tokenExchangeUrl(tokenExchangeUrl)
                 .subjectTokenSupplier(() -> {
@@ -435,7 +463,7 @@ public class WorkloadIdentityFederationAuthenticationExample {
                 .region(Region.fromRegionId(regionId))
                 .secondsToExpireSessionTokenEarly(300L)
                 .withCircuitBreaker()
-                .retryConfiguration(RetryConfiguration.BASIC)
+                .retryConfiguration(buildTokenExchangeRetryConfiguration())
                 .buildAsync()
                 .thenCompose(provider -> {
                     logger.info("✓ Proactive refresh provider initialized (async)");
@@ -475,5 +503,14 @@ public class WorkloadIdentityFederationAuthenticationExample {
                                 return provider; // return provider for caller to manage lifecycle
                             });
                 });
+    }
+
+    private static RetryConfiguration buildTokenExchangeRetryConfiguration() {
+        long maxDelayMillis = TimeUnit.SECONDS.toMillis(30);
+        return RetryConfiguration.builder()
+                .terminationStrategy(new MaxAttemptsTerminationStrategy(3))
+                .delayStrategy(new ExponentialBackoffDelayStrategyWithJitter(maxDelayMillis))
+                .retryCondition(exception -> new DefaultRetryCondition().shouldBeRetried(exception))
+                .build();
     }
 }

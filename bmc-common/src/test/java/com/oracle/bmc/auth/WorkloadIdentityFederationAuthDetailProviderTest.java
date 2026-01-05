@@ -9,6 +9,10 @@ import com.oracle.bmc.auth.internal.AbstractAsyncFederationClient;
 import com.oracle.bmc.auth.internal.SecurityTokenAdapter;
 import com.oracle.bmc.auth.internal.WorkloadIdentityFederationClient;
 import com.oracle.bmc.circuitbreaker.CircuitBreakerConfiguration;
+import com.oracle.bmc.retrier.DefaultRetryCondition;
+import com.oracle.bmc.retrier.RetryConfiguration;
+import com.oracle.bmc.waiter.ExponentialBackoffDelayStrategyWithJitter;
+import com.oracle.bmc.waiter.MaxAttemptsTerminationStrategy;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -26,10 +30,13 @@ import java.util.function.Supplier;
 import java.util.logging.Logger;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -38,7 +45,8 @@ import static org.mockito.Mockito.when;
 @RunWith(MockitoJUnitRunner.Silent.class)
 public class WorkloadIdentityFederationAuthDetailProviderTest {
 
-        private static final Logger logger = Logger.getLogger(WorkloadIdentityFederationAuthDetailProviderTest.class.getName());
+        private static final Logger logger = Logger
+                        .getLogger(WorkloadIdentityFederationAuthDetailProviderTest.class.getName());
 
         // Test constants
         private static final String MOCK_TOKEN_EXCHANGE_URL = "https://test.token.exchange.url";
@@ -64,33 +72,30 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
 
         @Before
         public void setUp() {
-            // Set up mock behavior - no longer need to mock getSecondsUntilProactiveRefresh()
-            // since it's now internal to WorkloadIdentityFederationClient
-            when(mockFederationClient.getSecurityToken()).thenReturn(CompletableFuture.completedFuture("mock-token"));
-            when(mockFederationClient.refreshAndGetSecurityToken()).thenReturn(CompletableFuture.completedFuture("refreshed-token"));
+                // Set up mock behavior for federation client
+                when(mockFederationClient.getSecurityToken())
+                                .thenReturn(CompletableFuture.completedFuture("mock-token"));
+                when(mockFederationClient.refreshAndGetSecurityToken())
+                                .thenReturn(CompletableFuture.completedFuture("refreshed-token"));
 
-            provider = new WorkloadIdentityFederationAuthenticationDetailProvider(
-                    mockFederationClient,
-                    mockSessionKeySupplier,
-                    "https://test.token.exchange.url",
-                    Region.US_PHOENIX_1);
+                provider = new WorkloadIdentityFederationAuthenticationDetailProvider(
+                                mockFederationClient,
+                                mockSessionKeySupplier,
+                                "https://test.token.exchange.url",
+                                Region.US_PHOENIX_1);
         }
 
         @After
         public void tearDown() {
-            if (provider != null) {
-                provider.shutdown();
-            }
-        }
-
-        private void setupMockKeyPair() {
-            // Mock key pair setup for tests that need it
-            // This is a simplified version for testing
+                if (provider != null) {
+                        provider.shutdown();
+                }
         }
 
         @Test
         public void builderWithCircuitBreakerIsEnabled() {
-                class ConfigurationCapturingBuilder extends WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
+                class ConfigurationCapturingBuilder extends
+                                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
                         CircuitBreakerConfiguration capturedCircuitBreakerConfiguration;
                         boolean circuitBreakerEnabled = false;
 
@@ -101,9 +106,11 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                         }
 
                         @Override
-                        protected AbstractAsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
+                        protected AbstractAsyncFederationClient createFederationClient(
+                                        SessionKeySupplier sessionKeySupplier) {
                                 if (circuitBreakerEnabled) {
-                                        capturedCircuitBreakerConfiguration = CircuitBreakerConfiguration.builder().build();
+                                        capturedCircuitBreakerConfiguration = CircuitBreakerConfiguration.builder()
+                                                        .build();
                                 }
                                 return mock(AbstractAsyncFederationClient.class);
                         }
@@ -122,7 +129,8 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
 
         @Test
         public void builderWithoutCircuitBreakerIsDefault() {
-                class ConfigurationCapturingBuilder extends WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
+                class ConfigurationCapturingBuilder extends
+                                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
                         CircuitBreakerConfiguration capturedCircuitBreakerConfiguration;
                         boolean circuitBreakerEnabled = false;
 
@@ -133,9 +141,11 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                         }
 
                         @Override
-                        protected AbstractAsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
+                        protected AbstractAsyncFederationClient createFederationClient(
+                                        SessionKeySupplier sessionKeySupplier) {
                                 if (circuitBreakerEnabled) {
-                                        capturedCircuitBreakerConfiguration = CircuitBreakerConfiguration.builder().build();
+                                        capturedCircuitBreakerConfiguration = CircuitBreakerConfiguration.builder()
+                                                        .build();
                                 }
                                 return mock(AbstractAsyncFederationClient.class);
                         }
@@ -146,7 +156,7 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                                 .subjectTokenSupplier(() -> "test")
                                 .tokenExchangeUrl("https://test.com")
                                 .region(Region.US_ASHBURN_1)
-                                // DO NOT enable it
+                                // DO NOT enable circuit breaker
                                 .build();
 
                 assertNull(builder.capturedCircuitBreakerConfiguration);
@@ -251,17 +261,6 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
         }
 
         @Test
-        public void getSecurityTokenReturnsToken() {
-                setupMockKeyPair();
-                provider = new WorkloadIdentityFederationAuthenticationDetailProvider(
-                                mockFederationClient,
-                                mockSessionKeySupplier,
-                                MOCK_TOKEN_EXCHANGE_URL,
-                                MOCK_REGION);
-                assertEquals(MOCK_SECURITY_TOKEN, provider.refresh());
-        }
-
-        @Test
         public void refreshReturnsTokenFromFederationClient() {
                 setupMockKeyPair();
                 provider = new WorkloadIdentityFederationAuthenticationDetailProvider(
@@ -296,6 +295,12 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                 verify(mockFederationClient).refreshAndGetSecurityToken();
         }
 
+        // Verifies that concurrent refresh calls share a single in-flight refresh,
+        // ensuring only one call goes to the server while all callers receive the
+        // same refreshed token.
+        // It wires a counting wrapper around the federation client, synchronizes thread
+        // starts with latches/semaphores, and completes the server future once the
+        // first caller reaches the fetch to assert fan-out behavior.
         @Test
         public void concurrentRefreshReusesPendingRefresh() throws Exception {
                 // Use a real SessionKeySupplier
@@ -336,12 +341,10 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
 
                         @Override
                         public CompletableFuture<SecurityTokenAdapter> getSecurityTokenFromServer() {
+                                firstCallLatch.countDown();
                                 serverCallCount++;
                                 logger.info("getSecurityTokenFromServer called, count: " + serverCallCount
                                                 + ", thread: " + Thread.currentThread().getName());
-                                if (serverCallCount == 1) {
-                                        firstCallLatch.countDown();
-                                }
                                 return serverFuture;
                         }
 
@@ -410,21 +413,21 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
 
                 // Wait for all threads to complete
                 logger.info("Waiting for all threads to complete");
-                completeSemaphore.acquire(concurrentThreads);
+                boolean allCompleted = completeSemaphore.tryAcquire(concurrentThreads, 10, TimeUnit.SECONDS);
+                assertTrue("Refresh tasks did not all complete", allCompleted);
 
                 // Shutdown executor
                 executor.shutdown();
                 boolean terminated = executor.awaitTermination(10, TimeUnit.SECONDS);
-                if (!terminated) {
-                        logger.warning("Executor did not terminate in the specified time.");
-                        // Optionally, you can force shutdown or handle it according to your requirements
-                }
+                assertTrue("Executor did not terminate in time", terminated);
 
                 // Verify results
                 assertEquals("Only one server call should have been made", 1, countingClient.getServerCallCount());
                 for (int i = 0; i < concurrentThreads; i++) {
+                        assertFalse("Refresh future completed exceptionally",
+                                        refreshFutures[i].isCompletedExceptionally());
                         assertEquals("All threads should have the same token", MOCK_NEW_SECURITY_TOKEN,
-                                        refreshFutures[i].get());
+                                        refreshFutures[i].get(5, TimeUnit.SECONDS));
                 }
         }
 
@@ -436,13 +439,13 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                                 .thenReturn(CompletableFuture.completedFuture(MOCK_SECURITY_TOKEN));
 
                 // Create a builder that returns our mock federation client
-                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder =
-                        new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
-                                @Override
-                                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
-                                        return realFederationClient;
-                                }
-                        };
+                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder = new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
+                        @Override
+                        protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(
+                                        SessionKeySupplier sessionKeySupplier) {
+                                return realFederationClient;
+                        }
+                };
 
                 // Test buildAsync() completes successfully
                 CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> asyncProviderFuture = builder
@@ -453,11 +456,13 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                                 .buildAsync();
 
                 // Verify the future completes and returns a valid provider
-                WorkloadIdentityFederationAuthenticationDetailProvider asyncProvider = asyncProviderFuture.get(5, TimeUnit.SECONDS);
+                WorkloadIdentityFederationAuthenticationDetailProvider asyncProvider = asyncProviderFuture.get(5,
+                                TimeUnit.SECONDS);
                 assertNotNull("Async provider should not be null", asyncProvider);
                 assertEquals("Region should match", MOCK_REGION, asyncProvider.getRegion());
 
-                // Verify that getSecurityToken was called during buildAsync (token pre-fetching)
+                // Verify that getSecurityToken was called during buildAsync (token
+                // pre-fetching)
                 verify(realFederationClient, times(1)).getSecurityToken();
         }
 
@@ -470,13 +475,13 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                 when(realFederationClient.getSecurityToken()).thenReturn(failedTokenFuture);
 
                 // Create a builder that returns our mock federation client
-                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder =
-                        new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
-                                @Override
-                                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
-                                        return realFederationClient;
-                                }
-                        };
+                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder = new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
+                        @Override
+                        protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(
+                                        SessionKeySupplier sessionKeySupplier) {
+                                return realFederationClient;
+                        }
+                };
 
                 // Test buildAsync() fails appropriately
                 CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> asyncProviderFuture = builder
@@ -502,13 +507,15 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
         public void buildAsyncVsSyncBehaviorComparison() throws Exception {
                 // This test demonstrates the key difference between build() and buildAsync()
                 // build() = provider created immediately, token fetched on first use
-                // buildAsync() = token fetched during provider creation, provider ready immediately
+                // buildAsync() = token fetched during provider creation, provider ready
+                // immediately
 
                 CountDownLatch tokenFetchStarted = new CountDownLatch(1);
                 CountDownLatch allowTokenFetchToComplete = new CountDownLatch(1);
 
                 // Create a mock federation client that allows us to control timing
-                WorkloadIdentityFederationClient controlledFederationClient = mock(WorkloadIdentityFederationClient.class);
+                WorkloadIdentityFederationClient controlledFederationClient = mock(
+                                WorkloadIdentityFederationClient.class);
                 when(controlledFederationClient.getSecurityToken()).thenAnswer(invocation -> {
                         logger.info("Token fetch started");
                         tokenFetchStarted.countDown();
@@ -525,13 +532,13 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                 });
 
                 // Create a builder that returns our controlled federation client
-                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder =
-                        new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
-                                @Override
-                                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
-                                        return controlledFederationClient;
-                                }
-                        };
+                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder = new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
+                        @Override
+                        protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(
+                                        SessionKeySupplier sessionKeySupplier) {
+                                return controlledFederationClient;
+                        }
+                };
 
                 // Test buildAsync() - should trigger token fetch immediately
                 logger.info("Starting buildAsync() test");
@@ -550,7 +557,8 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                 allowTokenFetchToComplete.countDown();
 
                 // Verify buildAsync() completes successfully
-                WorkloadIdentityFederationAuthenticationDetailProvider asyncProvider = asyncFuture.get(5, TimeUnit.SECONDS);
+                WorkloadIdentityFederationAuthenticationDetailProvider asyncProvider = asyncFuture.get(5,
+                                TimeUnit.SECONDS);
                 assertNotNull("Async provider should be created successfully", asyncProvider);
 
                 // Verify getSecurityToken was called during buildAsync (pre-fetching behavior)
@@ -602,26 +610,30 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
 
         @Test
         public void buildAsyncReturnsProviderWithSameConfigurationAsBuild() throws Exception {
-                // Verify that buildAsync() creates a provider with identical configuration to build()
+                // Verify that buildAsync() creates a provider with identical configuration to
+                // build()
                 setupMockKeyPair();
 
-                // Mock the federation client for BOTH sync and async tests to avoid real HTTP calls
-                WorkloadIdentityFederationClient mockSyncFederationClient = mock(WorkloadIdentityFederationClient.class);
+                // Mock the federation client for BOTH sync and async tests to avoid real HTTP
+                // calls
+                WorkloadIdentityFederationClient mockSyncFederationClient = mock(
+                                WorkloadIdentityFederationClient.class);
                 when(mockSyncFederationClient.getSecurityToken())
                                 .thenReturn(CompletableFuture.completedFuture(MOCK_SECURITY_TOKEN));
 
-                WorkloadIdentityFederationClient mockAsyncFederationClient = mock(WorkloadIdentityFederationClient.class);
+                WorkloadIdentityFederationClient mockAsyncFederationClient = mock(
+                                WorkloadIdentityFederationClient.class);
                 when(mockAsyncFederationClient.getSecurityToken())
                                 .thenReturn(CompletableFuture.completedFuture(MOCK_SECURITY_TOKEN));
 
                 // Create a builder for sync provider that returns our mock federation client
-                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder syncBuilder =
-                        new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
-                                @Override
-                                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
-                                        return mockSyncFederationClient;
-                                }
-                        };
+                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder syncBuilder = new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
+                        @Override
+                        protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(
+                                        SessionKeySupplier sessionKeySupplier) {
+                                return mockSyncFederationClient;
+                        }
+                };
 
                 // Create sync provider with mocked federation client
                 WorkloadIdentityFederationAuthenticationDetailProvider syncProvider = syncBuilder
@@ -633,13 +645,13 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                                 .build();
 
                 // Create a builder for async provider that returns our mock federation client
-                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder asyncBuilder =
-                        new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
-                                @Override
-                                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
-                                        return mockAsyncFederationClient;
-                                }
-                        };
+                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder asyncBuilder = new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
+                        @Override
+                        protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(
+                                        SessionKeySupplier sessionKeySupplier) {
+                                return mockAsyncFederationClient;
+                        }
+                };
 
                 WorkloadIdentityFederationAuthenticationDetailProvider asyncProvider = asyncBuilder
                                 .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
@@ -652,7 +664,7 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
 
                 // Verify both providers have the same configuration
                 assertEquals("Both providers should have the same region",
-                        syncProvider.getRegion(), asyncProvider.getRegion());
+                                syncProvider.getRegion(), asyncProvider.getRegion());
                 assertNotNull("Both providers should have non-null key IDs", syncProvider.getKeyId());
                 assertNotNull("Both providers should have non-null key IDs", asyncProvider.getKeyId());
                 assertNotNull("Both providers should have private keys", syncProvider.getPrivateKey());
@@ -662,255 +674,177 @@ public class WorkloadIdentityFederationAuthDetailProviderTest {
                 // AND called again during getKeyId() - so expect 2 calls total
                 verify(mockAsyncFederationClient, times(2)).getSecurityToken();
 
-                // Verify the sync provider only fetched tokens when needed (during getKeyId() call)
+                // Verify the sync provider only fetched tokens when needed (during getKeyId()
+                // call)
                 verify(mockSyncFederationClient, times(1)).getSecurityToken(); // Called only by getKeyId()
         }
 
         @Test
         public void testProactiveRefreshIsHandledByClient() {
-            // After refactoring, proactive refresh is handled internally by WorkloadIdentityFederationClient
-            // The provider should just delegate to the client without any scheduling logic
+                // Verify that proactive refresh is handled internally by
+                // WorkloadIdentityFederationClient
+                // The provider should just delegate to the client without any scheduling logic
 
-            when(mockFederationClient.refreshAndGetSecurityToken())
-                    .thenReturn(CompletableFuture.completedFuture("new-token"));
+                when(mockFederationClient.refreshAndGetSecurityToken())
+                                .thenReturn(CompletableFuture.completedFuture("new-token"));
 
-            // Call refresh - this should delegate to the client
-            String token = provider.refresh();
+                // Call refresh - this should delegate to the client
+                String token = provider.refresh();
 
-            // Verify the refresh was called and returned the expected token
-            assertEquals("new-token", token);
-            verify(mockFederationClient, times(1)).refreshAndGetSecurityToken();
-
-            // The provider no longer handles scheduling - that's done by the client internally
-            // So we just verify the delegation happened correctly
+                // Verify the refresh was called and returned the expected token
+                assertEquals("new-token", token);
+                verify(mockFederationClient, times(1)).refreshAndGetSecurityToken();
         }
 
         @Test
         public void testShutdownDelegatesToClient() {
-            // After refactoring, shutdown should delegate to the client's shutdown method
-            // Since we're using a mock, we can't verify the internal shutdown call directly,
-            // but we can verify that shutdown doesn't throw an exception
+                // Verify that shutdown delegates to the underlying federation client and is
+                // idempotent.
+                class ShutdownCapturingClient extends WorkloadIdentityFederationClient {
+                        private int shutdownCount = 0;
 
-            // Shutdown should not throw an exception
-            provider.shutdown();
+                        ShutdownCapturingClient(String tokenExchangeEndpoint, Supplier<String> subjectTokenSupplier,
+                                        SessionKeySupplier sessionKeySupplier, String clientCredentials) {
+                                super(tokenExchangeEndpoint, subjectTokenSupplier, sessionKeySupplier,
+                                                clientCredentials);
+                        }
 
-            // Multiple shutdowns should be safe
-            provider.shutdown();
+                        @Override
+                        public void shutdown() {
+                                shutdownCount++;
+                                super.shutdown();
+                        }
 
-            // The actual WorkloadIdentityFederationClient shutdown logic is tested separately
+                        int getShutdownCount() {
+                                return shutdownCount;
+                        }
+                }
+
+                SessionKeySupplier realKeySupplier = new SessionKeySupplierImpl();
+                ShutdownCapturingClient capturingClient = new ShutdownCapturingClient(
+                                MOCK_TOKEN_EXCHANGE_URL,
+                                mockSubjectTokenSupplier,
+                                realKeySupplier,
+                                MOCK_CLIENT_CREDENTIAL);
+
+                WorkloadIdentityFederationAuthenticationDetailProvider shutdownProvider = new WorkloadIdentityFederationAuthenticationDetailProvider(
+                                capturingClient,
+                                realKeySupplier,
+                                MOCK_TOKEN_EXCHANGE_URL,
+                                MOCK_REGION);
+
+                shutdownProvider.shutdown();
+                shutdownProvider.shutdown();
+
+                assertEquals("Shutdown should delegate on each call", 2, capturingClient.getShutdownCount());
         }
 
         @Test
-        public void testProactiveRefreshEnabledWhenRetryConfigurationProvided() {
-            // Test that proactive refresh is automatically enabled when retry configuration is provided
-            class ProactiveRefreshCapturingBuilder extends WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
-                boolean proactiveRefreshEnabled = false;
+        public void testProactiveRefreshFlagReflectsRetryConfigurationPresence() {
+                class ProactiveRefreshCapturingBuilder extends
+                                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
+                        boolean proactiveRefreshEnabled = false;
 
-                @Override
-                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
-                    // Capture whether proactive refresh was enabled based on retry configuration
-                    // In this test, we simulate the logic: proactiveRefresh = retryConfiguration != null
-                    WorkloadIdentityFederationClient mockClient = mock(WorkloadIdentityFederationClient.class);
-                    when(mockClient.getSecurityToken()).thenReturn(CompletableFuture.completedFuture("test-token"));
-                    return mockClient;
+                        @Override
+                        protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(
+                                        SessionKeySupplier sessionKeySupplier) {
+                                WorkloadIdentityFederationClient mockClient = mock(
+                                                WorkloadIdentityFederationClient.class);
+                                when(mockClient.getSecurityToken())
+                                                .thenReturn(CompletableFuture.completedFuture("test-token"));
+                                return mockClient;
+                        }
+
+                        @Override
+                        public WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder retryConfiguration(
+                                        RetryConfiguration retryConfiguration) {
+                                proactiveRefreshEnabled = (retryConfiguration != null);
+                                return super.retryConfiguration(retryConfiguration);
+                        }
                 }
 
-                @Override
-                public WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder retryConfiguration(RetryConfiguration retryConfiguration) {
-                    // When retry configuration is set, proactive refresh should be automatically enabled
-                    proactiveRefreshEnabled = (retryConfiguration != null);
-                    return super.retryConfiguration(retryConfiguration);
-                }
-            }
+                ProactiveRefreshCapturingBuilder withRetry = new ProactiveRefreshCapturingBuilder();
+                withRetry.clientCredential("test")
+                                .subjectTokenSupplier(() -> "test")
+                                .tokenExchangeUrl("https://test.com")
+                                .region(Region.US_ASHBURN_1)
+                                .retryConfiguration(createTestRetryConfiguration(3, 30))
+                                .build();
+                assertTrue("Proactive refresh should be enabled when retry configuration is provided",
+                                withRetry.proactiveRefreshEnabled);
 
-            ProactiveRefreshCapturingBuilder builder = new ProactiveRefreshCapturingBuilder();
-            builder.clientCredential("test")
-                    .subjectTokenSupplier(() -> "test")
-                    .tokenExchangeUrl("https://test.com")
-                    .region(Region.US_ASHBURN_1)
-                    .retryConfiguration(RetryConfiguration.BASIC) // This should automatically enable proactive refresh
-                    .build();
-
-            // Verify proactive refresh was automatically enabled when retry configuration was provided
-            assertEquals("Proactive refresh should be automatically enabled when retry configuration is provided",
-                        true, builder.proactiveRefreshEnabled);
-        }
-
-        @Test
-        public void testProactiveRefreshDisabledWhenNoRetryConfiguration() {
-            // Test that proactive refresh is disabled when no retry configuration is provided
-            class ProactiveRefreshCapturingBuilder extends WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
-                boolean proactiveRefreshEnabled = true; // Start with true to verify it gets set to false
-
-                @Override
-                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
-                    // Capture whether proactive refresh was enabled based on retry configuration
-                    // Logic: proactiveRefresh = retryConfiguration != null
-                    proactiveRefreshEnabled = false; // No retry config means proactive refresh disabled
-                    WorkloadIdentityFederationClient mockClient = mock(WorkloadIdentityFederationClient.class);
-                    when(mockClient.getSecurityToken()).thenReturn(CompletableFuture.completedFuture("test-token"));
-                    return mockClient;
-                }
-            }
-
-            ProactiveRefreshCapturingBuilder builder = new ProactiveRefreshCapturingBuilder();
-            builder.clientCredential("test")
-                    .subjectTokenSupplier(() -> "test")
-                    .tokenExchangeUrl("https://test.com")
-                    .region(Region.US_ASHBURN_1)
-                    // Don't call retryConfiguration() - should disable proactive refresh
-                    .build();
-
-            // Verify proactive refresh was disabled when no retry configuration was provided
-            assertEquals("Proactive refresh should be disabled when no retry configuration is provided",
-                        false, builder.proactiveRefreshEnabled);
-        }
-
-        @Test
-        public void testRetryConfigurationReturnsSameBuilder() {
-            // Test that retryConfiguration() returns the same builder instance for method chaining
-            WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder =
-                WorkloadIdentityFederationAuthenticationDetailProvider.builder();
-
-            WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder result =
-                builder.retryConfiguration(RetryConfiguration.BASIC);
-
-            assertEquals("retryConfiguration() should return the same builder instance for method chaining",
-                        builder, result);
+                ProactiveRefreshCapturingBuilder withoutRetry = new ProactiveRefreshCapturingBuilder();
+                withoutRetry.clientCredential("test")
+                                .subjectTokenSupplier(() -> "test")
+                                .tokenExchangeUrl("https://test.com")
+                                .region(Region.US_ASHBURN_1)
+                                .build();
+                assertFalse("Proactive refresh should be disabled when retry configuration is absent",
+                                withoutRetry.proactiveRefreshEnabled);
         }
 
         @Test
         public void testRetryConfigurationWithNullThrowsException() {
-            // Test that passing null to retryConfiguration() throws IllegalArgumentException
-            assertThrows(IllegalArgumentException.class, () -> {
-                WorkloadIdentityFederationAuthenticationDetailProvider.builder()
-                        .retryConfiguration(null);
-            });
-        }
-
-        @Test
-        public void testRetryConfigurationWithStaticConstants() {
-            // Test that all static retry configuration constants work
-            WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder =
-                WorkloadIdentityFederationAuthenticationDetailProvider.builder();
-
-            // Test BASIC configuration
-            builder.retryConfiguration(RetryConfiguration.BASIC);
-
-            // Test CONSERVATIVE configuration
-            builder.retryConfiguration(RetryConfiguration.CONSERVATIVE);
-
-            // Test AGGRESSIVE configuration
-            builder.retryConfiguration(RetryConfiguration.AGGRESSIVE);
-
-            // Test custom configuration
-            builder.retryConfiguration(RetryConfiguration.custom(5, 60));
-
-            // No exceptions should be thrown
-        }
-
-        @Test
-        public void testRetryConfigurationDefaultBehavior() {
-            // Test that when no retry configuration is provided, retries are disabled by default
-            class RetryConfigurationCapturingBuilder extends WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
-                RetryConfiguration capturedRetryConfiguration = null;
-                boolean retryConfigurationWasSet = false;
-
-                @Override
-                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
-                    // Capture the retry configuration that would be passed to the client
-                    // In the real implementation, this would be passed to WorkloadIdentityFederationClient constructor
-                    WorkloadIdentityFederationClient mockClient = mock(WorkloadIdentityFederationClient.class);
-                    when(mockClient.getSecurityToken()).thenReturn(CompletableFuture.completedFuture("test-token"));
-                    return mockClient;
-                }
-
-                @Override
-                public WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder retryConfiguration(RetryConfiguration retryConfiguration) {
-                    capturedRetryConfiguration = retryConfiguration;
-                    retryConfigurationWasSet = true;
-                    return super.retryConfiguration(retryConfiguration);
-                }
-            }
-
-            RetryConfigurationCapturingBuilder builder = new RetryConfigurationCapturingBuilder();
-            builder.clientCredential("test")
-                    .subjectTokenSupplier(() -> "test")
-                    .tokenExchangeUrl("https://test.com")
-                    .region(Region.US_ASHBURN_1)
-                    .build(); // Don't call retryConfiguration()
-
-            // Verify no retry configuration was set (default behavior = no retries)
-            assertEquals("Retry configuration should not be set by default", false, builder.retryConfigurationWasSet);
-            assertNull("Captured retry configuration should be null by default", builder.capturedRetryConfiguration);
-        }
-
-        @Test
-        public void testRetryConfigurationExplicitlySet() {
-            // Test that retry configuration can be explicitly set
-            class RetryConfigurationCapturingBuilder extends WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder {
-                RetryConfiguration capturedRetryConfiguration = null;
-                boolean retryConfigurationWasSet = false;
-
-                @Override
-                protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
-                    WorkloadIdentityFederationClient mockClient = mock(WorkloadIdentityFederationClient.class);
-                    when(mockClient.getSecurityToken()).thenReturn(CompletableFuture.completedFuture("test-token"));
-                    return mockClient;
-                }
-
-                @Override
-                public WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder retryConfiguration(RetryConfiguration retryConfiguration) {
-                    capturedRetryConfiguration = retryConfiguration;
-                    retryConfigurationWasSet = true;
-                    return super.retryConfiguration(retryConfiguration);
-                }
-            }
-
-            RetryConfigurationCapturingBuilder builder = new RetryConfigurationCapturingBuilder();
-            builder.clientCredential("test")
-                    .subjectTokenSupplier(() -> "test")
-                    .tokenExchangeUrl("https://test.com")
-                    .region(Region.US_ASHBURN_1)
-                    .retryConfiguration(RetryConfiguration.BASIC) // Explicitly set retry configuration
-                    .build();
-
-            // Verify retry configuration was set
-            assertEquals("Retry configuration should be set when explicitly called", true, builder.retryConfigurationWasSet);
-            assertEquals("Captured retry configuration should match what was set", RetryConfiguration.BASIC, builder.capturedRetryConfiguration);
+                assertThrows(IllegalArgumentException.class, () -> {
+                        WorkloadIdentityFederationAuthenticationDetailProvider.builder()
+                                        .retryConfiguration(null);
+                });
         }
 
         @Test
         public void testProactiveRefreshWithRetryConfiguration() throws Exception {
-            // Test that proactive refresh works with retry configuration
-            WorkloadIdentityFederationClient mockFederationClient = mock(WorkloadIdentityFederationClient.class);
-            when(mockFederationClient.getSecurityToken())
-                    .thenReturn(CompletableFuture.completedFuture(MOCK_SECURITY_TOKEN));
+                // Test that proactive refresh works with retry configuration
+                WorkloadIdentityFederationClient mockFederationClient = mock(WorkloadIdentityFederationClient.class);
+                when(mockFederationClient.getSecurityToken())
+                                .thenReturn(CompletableFuture.completedFuture(MOCK_SECURITY_TOKEN));
 
-            // Create a builder that returns our mock federation client
-            WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder =
-                new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
-                    @Override
-                    protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(SessionKeySupplier sessionKeySupplier) {
-                        return mockFederationClient;
-                    }
+                // Create a builder that returns our mock federation client
+                WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder builder = new WorkloadIdentityFederationAuthenticationDetailProvider.WorkloadIdentityFederationAuthenticationDetailProviderBuilder() {
+                        @Override
+                        protected com.oracle.bmc.auth.internal.AsyncFederationClient createFederationClient(
+                                        SessionKeySupplier sessionKeySupplier) {
+                                return mockFederationClient;
+                        }
                 };
 
-            // Test buildAsync() with retry configuration (which automatically enables proactive refresh)
-            CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> asyncProviderFuture = builder
-                    .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
-                    .subjectTokenSupplier(mockSubjectTokenSupplier)
-                    .clientCredential(MOCK_CLIENT_CREDENTIAL)
-                    .region(MOCK_REGION)
-                    .retryConfiguration(RetryConfiguration.BASIC) // Enable retry configuration (automatically enables proactive refresh)
-                    .buildAsync();
+                // Test buildAsync() with retry configuration (which automatically enables
+                // proactive refresh)
+                CompletableFuture<WorkloadIdentityFederationAuthenticationDetailProvider> asyncProviderFuture = builder
+                                .tokenExchangeUrl(MOCK_TOKEN_EXCHANGE_URL)
+                                .subjectTokenSupplier(mockSubjectTokenSupplier)
+                                .clientCredential(MOCK_CLIENT_CREDENTIAL)
+                                .region(MOCK_REGION)
+                                .retryConfiguration(createTestRetryConfiguration(3, 30)) // Enable retry configuration
+                                                                                         // (automatically enables
+                                                                                         // proactive refresh)
+                                .buildAsync();
 
-            // Verify the future completes successfully
-            WorkloadIdentityFederationAuthenticationDetailProvider asyncProvider = asyncProviderFuture.get(5, TimeUnit.SECONDS);
-            assertNotNull("Async provider with retry configuration should not be null", asyncProvider);
-            assertEquals("Region should match", MOCK_REGION, asyncProvider.getRegion());
+                // Verify the future completes successfully
+                WorkloadIdentityFederationAuthenticationDetailProvider asyncProvider = asyncProviderFuture.get(5,
+                                TimeUnit.SECONDS);
+                assertNotNull("Async provider with retry configuration should not be null", asyncProvider);
+                assertEquals("Region should match", MOCK_REGION, asyncProvider.getRegion());
 
-            // Verify that getSecurityToken was called during buildAsync (token pre-fetching)
-            verify(mockFederationClient, times(1)).getSecurityToken();
+                // Verify that getSecurityToken was called during buildAsync (token
+                // pre-fetching)
+                verify(mockFederationClient, times(1)).getSecurityToken();
+        }
+
+        private void setupMockKeyPair() {
+                SessionKeySupplier realSupplier = new SessionKeySupplierImpl();
+                when(mockSessionKeySupplier.getKeyPair()).thenAnswer(invocation -> realSupplier.getKeyPair());
+                doAnswer(invocation -> {
+                        realSupplier.refreshKeys();
+                        return null;
+                }).when(mockSessionKeySupplier).refreshKeys();
+        }
+
+        private static RetryConfiguration createTestRetryConfiguration(int maxAttempts, long maxDelaySeconds) {
+                long maxDelayMillis = TimeUnit.SECONDS.toMillis(maxDelaySeconds);
+                return RetryConfiguration.builder()
+                                .terminationStrategy(new MaxAttemptsTerminationStrategy(maxAttempts))
+                                .delayStrategy(new ExponentialBackoffDelayStrategyWithJitter(maxDelayMillis))
+                                .retryCondition(exception -> new DefaultRetryCondition().shouldBeRetried(exception))
+                                .build();
         }
 }
